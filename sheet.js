@@ -25,7 +25,7 @@
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
 import {
   ID, CHAR_KEY, CHANNEL, ATTRS, SKILLS,
-  parseCode, rebuildCode, rollDice, resolveRoll, clamp,
+  parseCode, rebuildCode, rollDice, resolveRoll, clamp, shutDownAttrs,
 } from "./dnm.js";
 
 const params = new URLSearchParams(location.search);
@@ -106,23 +106,63 @@ function render() {
   if (snap.portraitUrl) { img.src = snap.portraitUrl; img.hidden = false; }
   else img.hidden = true;
 
+  renderExhaustion();
   renderStats();
   renderResources();
   renderInjuries();
   renderTruths();
   renderTalents();
+  renderAbilities();
+  renderTemperament();
   renderBonds();
   renderItems();
   renderTestBar();
 }
 
+function renderExhaustion() {
+  const { snap, char } = parsed;
+  const box = el("exhaustion");
+  box.innerHTML = "";
+  const types = snap.exhaustionTypes || [];
+  if (!types.length) {
+    box.innerHTML = '<p class="empty">Re-export from creator v1.12 to enable exhaustion tracking.</p>';
+    return;
+  }
+  if (!Array.isArray(char.activeExhaustion)) char.activeExhaustion = [];
+
+  for (const t of types) {
+    const active = char.activeExhaustion.includes(t.key);
+    const card = document.createElement("button");
+    card.className = "exh-card" + (active ? " active" : "");
+    card.title = t.desc || "";
+    const n = document.createElement("span");
+    n.className = "exh-name";
+    n.textContent = t.name;
+    const a = document.createElement("span");
+    a.className = "exh-attr";
+    a.textContent = `Shuts down ${t.attrName || t.attr}`;
+    card.append(n, a);
+    card.addEventListener("click", () => {
+      char.activeExhaustion = active
+        ? char.activeExhaustion.filter((k) => k !== t.key)
+        : [...char.activeExhaustion, t.key];
+      renderExhaustion();
+      renderStats();
+      renderTestBar();
+      queueSave();
+    });
+    box.append(card);
+  }
+}
+
 function renderStats() {
   const { snap } = parsed;
 
+  const down = shutDownAttrs(snap, parsed.char);
   const attrBox = el("attrs");
   attrBox.innerHTML = "";
   for (const [key, label] of Object.entries(ATTRS)) {
-    attrBox.append(statRow(key, label, snap.attrs?.[key] ?? 0, "attr"));
+    attrBox.append(statRow(key, label, snap.attrs?.[key] ?? 0, "attr", down.has(key)));
   }
 
   const skillBox = el("skills");
@@ -132,9 +172,10 @@ function renderStats() {
   }
 }
 
-function statRow(key, label, value, kind) {
+function statRow(key, label, value, kind, isDown = false) {
   const row = document.createElement("button");
-  row.className = "stat-row-btn";
+  row.className = "stat-row-btn" + (isDown ? " down" : "");
+  if (isDown) row.title = "Exhausted: tests against this attribute fail automatically";
   row.dataset.kind = kind;
   row.dataset.key = key;
   if ((kind === "attr" && pickedAttr === key) || (kind === "skill" && pickedSkill === key)) {
@@ -148,6 +189,7 @@ function statRow(key, label, value, kind) {
   v.textContent = value;
   row.append(n, v);
   row.addEventListener("click", () => {
+    if (isDown) return;
     if (kind === "attr") pickedAttr = pickedAttr === key ? null : key;
     else pickedSkill = pickedSkill === key ? null : key;
     renderStats();
@@ -281,6 +323,34 @@ function renderTalents() {
   }
 }
 
+function proseSection(boxId, entries) {
+  const box = el(boxId);
+  box.innerHTML = "";
+  if (!entries.length) { box.innerHTML = '<p class="empty">None</p>'; return; }
+  for (const [title, text] of entries) {
+    const d = document.createElement("div");
+    d.className = "prose-item";
+    const h = document.createElement("h3");
+    h.textContent = title;
+    const p = document.createElement("p");
+    p.textContent = text || "";
+    d.append(h, p);
+    box.append(d);
+  }
+}
+
+function renderAbilities() {
+  proseSection("abilities", (parsed.snap.abilities || []).map((a) => [a.name, a.desc]));
+}
+
+function renderTemperament() {
+  const { snap } = parsed;
+  const rows = [];
+  if (snap.temperament) rows.push([snap.temperament, snap.temperamentDesc]);
+  if (snap.temperamentExhaustion) rows.push(["When exhausted", snap.temperamentExhaustion]);
+  proseSection("temperament", rows);
+}
+
 function renderBonds() {
   const { snap } = parsed;
   const box = el("bonds");
@@ -289,9 +359,9 @@ function renderBonds() {
     const d = document.createElement("div");
     d.className = "prose-item";
     const h = document.createElement("h3");
-    h.textContent = b.name;
+    h.textContent = `${b.name}${b.typeName ? ` \u2014 ${b.typeName}` : ""}`;
     const p = document.createElement("p");
-    p.textContent = b.type || "";
+    p.textContent = b.desc || b.type || "";
     d.append(h, p);
     box.append(d);
   }

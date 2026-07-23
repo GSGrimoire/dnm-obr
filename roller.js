@@ -21,8 +21,8 @@
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
 import {
-  ROOM_KEY as KEY, CHANNEL, ATTRS, SKILLS, EMPTY_STATE,
-  rollDice, resolveRoll, clamp, applyEvent,
+  ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE,
+  rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -34,6 +34,11 @@ let standalone = false;
 let hiddenLog = [];
 let diceCount = 2;
 let difficulty = 1;
+
+// The character on the currently selected token, if it has one. The popover
+// has no idea who you are on its own, so selection is what tells it. Read
+// only here: the sheet owns edits to the character.
+let activeChar = null;
 
 // The roll engine, the attribute and skill names, and the room metadata key
 // all live in dnm.js so the sheet and the roller can never disagree about what
@@ -134,6 +139,69 @@ async function clearLog() {
 }
 
 // -------------------------------------------------------------
+// Selected character
+// -------------------------------------------------------------
+async function refreshSelection() {
+  let next = null;
+  try {
+    const sel = await OBR.player.getSelection();
+    if (sel && sel.length) {
+      const items = await OBR.scene.items.getItems(sel);
+      const withChar = items.find((i) => i.metadata?.[CHAR_KEY]?.code);
+      if (withChar) {
+        const r = parseCode(withChar.metadata[CHAR_KEY].code);
+        if (!r.error) next = { itemId: withChar.id, snap: r.snap, char: r.char };
+      }
+    }
+  } catch {
+    // No scene open, or the selection went away mid-read. Fall back to manual.
+    next = null;
+  }
+  activeChar = next;
+  applyChar();
+}
+
+function applyChar() {
+  const banner = el("char-banner");
+  const manual = [attrValEl, skillValEl];
+
+  if (!activeChar) {
+    banner.hidden = true;
+    manual.forEach((i) => i.removeAttribute("readonly"));
+    updateHint();
+    return;
+  }
+
+  const { snap, char } = activeChar;
+  charEl.value = snap.name || charEl.value;
+  manual.forEach((i) => i.setAttribute("readonly", "readonly"));
+  syncValuesFromChar();
+
+  const down = shutDownAttrs(snap, char);
+  const spirit = char.currentSpirit;
+  const bits = [`Rolling as ${snap.name || "character"}`];
+  if (spirit != null) bits.push(`Spirit ${spirit}/${snap.spiritMax ?? "?"}`);
+  banner.innerHTML = "";
+  const left = document.createElement("span");
+  left.textContent = bits.join("  \u00b7  ");
+  banner.append(left);
+  if (down.size) {
+    const w = document.createElement("span");
+    w.className = "warn";
+    w.textContent = `Exhausted: ${[...down].map((k) => ATTRS[k]).join(", ")}`;
+    banner.append(w);
+  }
+  banner.hidden = false;
+  updateHint();
+}
+
+function syncValuesFromChar() {
+  if (!activeChar) return;
+  attrValEl.value = activeChar.snap.attrs?.[attrKeyEl.value] ?? 0;
+  skillValEl.value = activeChar.snap.skills?.[skillKeyEl.value] ?? 0;
+}
+
+// -------------------------------------------------------------
 // Rendering
 // -------------------------------------------------------------
 function updateHint() {
@@ -215,6 +283,8 @@ function setSegmented(containerId, active) {
 function wireUI() {
   attrValEl.addEventListener("input", updateHint);
   skillValEl.addEventListener("input", updateHint);
+  attrKeyEl.addEventListener("change", () => { syncValuesFromChar(); updateHint(); });
+  skillKeyEl.addEventListener("change", () => { syncValuesFromChar(); updateHint(); });
 
   el("dice-seg").addEventListener("click", (ev) => {
     const btn = ev.target.closest("[data-dice]");
@@ -257,10 +327,13 @@ async function startInOwlbear() {
   await load();
   render();
 
+  // onChange fires when the selection changes, which is how the popover
+  // learns which character you are pointing at.
   OBR.player.onChange((player) => {
     role = player.role;
     playerName = player.name || playerName;
     applyRole();
+    refreshSelection();
     render();
   });
 

@@ -156,4 +156,13 @@ export function resolveRoll(dice, attrValue, skillValue, diff) {
   };
 }
 
+// Exhaustion shuts down an attribute: tests against it fail automatically.
+// The types themselves ride in the snapshot from creator v1.12 so this file
+// does not need a copy of the rules table.
+export function shutDownAttrs(snap, char) {
+  const active = Array.isArray(char?.activeExhaustion) ? char.activeExhaustion : [];
+  const types = snap?.exhaustionTypes || [];
+  return new Set(types.filter((t) => active.includes(t.key)).map((t) => t.attr));
+}
+
 export const clamp = (n, lo, hi) => (Number.isNaN(n) ? lo : Math.min(hi, Math.max(lo, n)));

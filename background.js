@@ -39,10 +39,14 @@ function setupContextMenu() {
     onClick(context) {
       const item = context.items[0];
       if (!item) return;
+      // Windowed rather than full screen so the map stays visible behind it.
+      // Owlbear modals are centred and fixed; the API exposes size but no
+      // position or drag, so this is as close to a movable window as we get.
       OBR.modal.open({
         id: `${ID}/sheet-modal`,
         url: `${BASE}sheet.html?item=${encodeURIComponent(item.id)}`,
-        fullScreen: true,
+        width: 1200,
+        height: 900,
       });
     },
   });

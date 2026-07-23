@@ -12,11 +12,10 @@
 </head>
 <body class="sheet-body">
 
-<!-- Import state ------------------------------------------------ -->
 <div id="import-view" hidden>
   <div class="import-card">
     <h1>Attach a character</h1>
-    <p>Paste a character code exported from the Dreams &amp; Machines character creator, version 1.11 or newer.</p>
+    <p>Paste a character code exported from the Dreams &amp; Machines character creator, version 1.12 or newer.</p>
     <textarea id="code-input" rows="6" placeholder="DM1-..." spellcheck="false"></textarea>
     <p class="err" id="import-error"></p>
     <div class="row-end">
@@ -26,79 +25,89 @@
   </div>
 </div>
 
-<!-- Sheet state ------------------------------------------------- -->
 <div id="sheet-view" hidden>
 
   <header class="sheet-head">
     <img id="portrait" alt="" hidden>
     <div class="ident">
-      <h1 id="char-name">—</h1>
-      <p id="char-sub"></p>
+      <h1 id="char-name">&mdash;</h1>
+      <div id="ident-chips" class="chips"></div>
     </div>
     <div class="head-actions">
-      <button id="copy-code" class="ghost">Copy code for creator</button>
+      <button id="copy-code" class="ghost">Copy code</button>
       <button id="detach" class="ghost danger">Detach</button>
       <button id="close-sheet" class="primary">Close</button>
     </div>
   </header>
 
-  <div class="sheet-grid">
+  <div class="sheet-scroll">
 
-    <!-- Column 1: stats -->
-    <div class="col">
-      <section>
-        <h2>Attributes</h2>
-        <div id="attrs" class="stat-list"></div>
-      </section>
-      <section>
-        <h2>Skills</h2>
-        <div id="skills" class="stat-list"></div>
-      </section>
+    <section class="wide">
+      <h2>Exhaustion states <span class="hint">click to toggle</span></h2>
+      <div id="exhaustion" class="exh-row"></div>
+    </section>
+
+    <div class="sheet-grid">
+
+      <div class="col">
+        <section>
+          <h2>Attributes</h2>
+          <div id="attrs" class="stat-list"></div>
+        </section>
+        <section>
+          <h2>Skills</h2>
+          <div id="skills" class="stat-list"></div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section>
+          <h2>Resources</h2>
+          <div id="resources" class="res-list"></div>
+        </section>
+        <section>
+          <h2>Truths</h2>
+          <div id="truths" class="truth-list"></div>
+        </section>
+        <section>
+          <h2>Injuries</h2>
+          <ul id="injuries" class="tag-list"></ul>
+          <div class="row-add">
+            <input type="text" id="injury-input" placeholder="Add an injury" maxlength="60">
+            <button id="add-injury">Add</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section>
+          <h2>Talents</h2>
+          <div id="talents" class="prose-list"></div>
+        </section>
+        <section>
+          <h2>Abilities</h2>
+          <div id="abilities" class="prose-list"></div>
+        </section>
+        <section>
+          <h2>Temperament</h2>
+          <div id="temperament" class="prose-list"></div>
+        </section>
+        <section>
+          <h2>Bonds &amp; goals</h2>
+          <div id="bonds" class="prose-list"></div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section>
+          <h2>Inventory</h2>
+          <div id="items" class="item-list"></div>
+        </section>
+      </div>
+
     </div>
-
-    <!-- Column 2: resources and condition -->
-    <div class="col">
-      <section>
-        <h2>Resources</h2>
-        <div id="resources" class="res-list"></div>
-      </section>
-      <section>
-        <h2>Injuries</h2>
-        <ul id="injuries" class="tag-list"></ul>
-        <div class="row-add">
-          <input type="text" id="injury-input" placeholder="Add an injury" maxlength="60">
-          <button id="add-injury">Add</button>
-        </div>
-      </section>
-      <section>
-        <h2>Truths</h2>
-        <div id="truths" class="truth-list"></div>
-      </section>
-    </div>
-
-    <!-- Column 3: character -->
-    <div class="col">
-      <section>
-        <h2>Talents</h2>
-        <div id="talents" class="prose-list"></div>
-      </section>
-      <section>
-        <h2>Bonds &amp; goals</h2>
-        <div id="bonds" class="prose-list"></div>
-      </section>
-    </div>
-
-    <!-- Column 4: gear -->
-    <div class="col">
-      <section>
-        <h2>Equipment</h2>
-        <div id="items" class="item-list"></div>
-      </section>
-    </div>
-
   </div>
 
-  <!-- Test bar -->
   <footer class="test-bar">
     <div class="test-pick">
       <span class="test-label">Test</span>

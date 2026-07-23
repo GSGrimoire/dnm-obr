@@ -204,3 +204,13 @@ button:disabled { opacity: .25; cursor: not-allowed; }
 .entry-sum.fail { color: var(--accent); }
 
 .status { font-size: 10px; color: var(--warning); min-height: 13px; text-align: center; font-family: var(--font-mono); }
+
+/* Selected-character banner --------------------------------- */
+.char-banner {
+  font-family: var(--font-mono); font-size: 10px;
+  background: var(--teal-faint); border: 1px solid var(--teal-dim);
+  border-radius: 3px; padding: 5px 7px; color: var(--teal);
+  display: flex; justify-content: space-between; gap: 8px;
+}
+.char-banner .warn { color: var(--accent); }
+input[readonly] { opacity: .7; cursor: not-allowed; }
