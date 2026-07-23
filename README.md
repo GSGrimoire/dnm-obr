@@ -1,7 +1,8 @@
 # Dreams & Machines — Rolls
 
-An Owlbear Rodeo extension: shared 2d20 rolls, a roll log that survives refreshes and
-rejoins, and shared Momentum and Threat counters.
+An Owlbear Rodeo extension for Dreams & Machines: shared Skill Tests, a roll log that
+survives refreshes and rejoins, shared Momentum and Threat counters, and full character
+sheets imported from the character creator.
 
 There is no build step. No Node, no npm, no terminal. Five static files pushed to a
 GitHub repo with Pages turned on.
@@ -16,14 +17,14 @@ The repo is `GSGrimoire/dnm-obr` and it is already public with Pages deployed. T
 does not matter to Owlbear at all, it only has to match the URLs in the manifest, which
 it now does.
 
-Upload all five files to the root of it:
+Upload all files to the root of it:
 
 ```
-manifest.json
-index.html
-roller.js
-style.css
-icon.svg
+manifest.json      background.html    sheet.html
+index.html         background.js      sheet.js
+roller.js          dnm.js             sheet.css
+style.css          icon.svg           icon-attach.svg
+                                      icon-sheet.svg
 ```
 
 You can drag them into the GitHub web uploader. Nothing needs installing locally.
@@ -114,3 +115,40 @@ extension behaves the same way the creator does rather than silently diverging.
 
 Exhaustion is not modelled. The creator blocks rolls against a shut-down Attribute, which
 needs the character sheet to know about; that arrives with character import.
+
+
+---
+
+## Character sheets
+
+Select a token and use its context menu. A token with no character attached offers
+**Attach D&M character**; paste a code exported from the creator (v1.11 or newer) and it
+becomes that character. After that the same menu offers **Open D&M sheet**.
+
+The token's metadata holds the character's DM1 code and nothing else. Everything on the
+sheet is derived from it and every edit rewrites it, so the code you copy back at end of
+session is always current. Writes are debounced.
+
+Only fields whose shape was verified against the creator's source are edited: the
+`current*` resource numbers, injuries, truths, and the equipped and discharged flags on
+items. Every other segment of the code is preserved byte for byte, which is what makes
+the round trip lossless. `activeExhaustion` is deliberately left alone because it holds
+keys into a rules table the snapshot does not carry yet.
+
+### Round trip
+
+Creator → export code → **Attach** to a token → play → **Copy code for creator** →
+paste back into the creator. Spirit spent, injuries taken, truths written and gear
+discharged all come back with it.
+
+### Rolling from the sheet
+
+Click an attribute and a skill to select them, set dice and difficulty, and roll. The
+result lands in the same shared log the roller popover shows. Dice beyond the first two
+cost one Spirit each and are deducted automatically; the button disables if the character
+cannot pay.
+
+### Not carried across yet
+
+Exhaustion, and the creator's per-character Momentum pool, which is a separate thing from
+the shared room pool the roller tracks. Worth deciding which one your table actually uses.

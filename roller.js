@@ -20,16 +20,10 @@
 // =============================================================
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
+import { ROOM_KEY as KEY, ATTRS, SKILLS, rollDice, resolveRoll, clamp } from "./dnm.js";
 
-const KEY = "com.thuknights.dnm-rolls/state";
 const MAX_LOG_ENTRIES = 40;
 const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
-
-const ATTRS = { might: "Might", quickness: "Quickness", insight: "Insight", resolve: "Resolve" };
-const SKILLS = {
-  fight: "Fight", move: "Move", operate: "Operate", sneak: "Sneak",
-  study: "Study", survive: "Survive", talk: "Talk",
-};
 
 const EMPTY_STATE = { v: 1, momentum: 0, threat: 0, log: [] };
 
@@ -41,52 +35,9 @@ let hiddenLog = [];
 let diceCount = 2;
 let difficulty = 1;
 
-// -------------------------------------------------------------
-// Roll engine
-// -------------------------------------------------------------
-// These rules are lifted directly from classifyDie() in
-// dnm-character-creator.html v1.10 so that the extension and the character
-// creator can never disagree about what a roll means:
-//
-//   - a natural 20 is a Complication and nothing else
-//   - a die at or under the SKILL value is a Critical, worth 2 successes
-//   - a die at or under the ATTRIBUTE value is 1 success
-//   - anything else fails
-//
-// Note the target number is the Attribute on its own. The Skill is the
-// critical range, not an addition to the target. The order of the checks
-// matters: 20 is tested first, so a 20 can never also count as a success.
-function classifyDie(value, attrValue, skillValue) {
-  if (value === 20) return "complication";
-  if (value <= skillValue) return "crit";
-  if (value <= attrValue) return "success";
-  return "fail";
-}
-
-function rollDice(n) {
-  const out = [];
-  for (let i = 0; i < n; i++) out.push(1 + Math.floor(Math.random() * 20));
-  return out;
-}
-
-function resolve(dice, attrValue, skillValue, diff) {
-  let successes = 0;
-  let complications = 0;
-  const detail = dice.map((d) => {
-    const kind = classifyDie(d, attrValue, skillValue);
-    if (kind === "crit") successes += 2;
-    else if (kind === "success") successes += 1;
-    else if (kind === "complication") complications += 1;
-    return { d, kind };
-  });
-  return {
-    detail,
-    successes,
-    complications,
-    passed: successes >= diff,
-    momentumGained: Math.max(0, successes - diff),
-  };
-}
+// The roll engine, the attribute and skill names, and the room metadata key
+// all live in dnm.js so the sheet and the roller can never disagree about what
+// a Skill Test means.
 
 // -------------------------------------------------------------
 // Elements
@@ -132,8 +83,6 @@ async function save() {
 
 const setStatus = (msg) => { statusEl.textContent = msg || ""; };
 
-const clamp = (n, lo, hi) => (Number.isNaN(n) ? lo : Math.min(hi, Math.max(lo, n)));
-
 // -------------------------------------------------------------
 // Actions
 // -------------------------------------------------------------
@@ -141,7 +90,7 @@ async function doRoll() {
   const attrValue = clamp(+attrValEl.value, 0, 20);
   const skillValue = clamp(+skillValEl.value, 0, 20);
   const dice = rollDice(diceCount);
-  const result = resolve(dice, attrValue, skillValue, difficulty);
+  const result = resolveRoll(dice, attrValue, skillValue, difficulty);
 
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,

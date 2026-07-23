@@ -1,9 +1,10 @@
 {
-  "name": "Dreams & Machines — Rolls",
-  "version": "0.2.0",
+  "name": "Dreams & Machines",
+  "version": "0.3.0",
   "manifest_version": 1,
   "author": "GS Grimoire",
-  "description": "Shared Skill Tests, a persistent roll log, and Momentum/Threat pools for Dreams & Machines.",
+  "description": "Skill Tests, a shared roll log, Momentum and Threat pools, and character sheets imported from the Dreams & Machines character creator.",
+  "background": "https://gsgrimoire.github.io/dnm-obr/background.html",
   "action": {
     "title": "D&M Rolls",
     "icon": "https://gsgrimoire.github.io/dnm-obr/icon.svg",
