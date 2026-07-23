@@ -20,12 +20,12 @@
 // =============================================================
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
-import { ROOM_KEY as KEY, ATTRS, SKILLS, rollDice, resolveRoll, clamp } from "./dnm.js";
+import {
+  ROOM_KEY as KEY, CHANNEL, ATTRS, SKILLS, EMPTY_STATE,
+  rollDice, resolveRoll, clamp, applyEvent,
+} from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
-const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
-
-const EMPTY_STATE = { v: 1, momentum: 0, threat: 0, log: [] };
 
 let state = structuredClone(EMPTY_STATE);
 let role = "PLAYER";
@@ -66,18 +66,15 @@ async function load() {
   state = found ? { ...structuredClone(EMPTY_STATE), ...found } : structuredClone(EMPTY_STATE);
 }
 
-async function save() {
-  state.log = state.log.slice(0, MAX_LOG_ENTRIES);
-  while (state.log.length > 1 && JSON.stringify(state).length > MAX_STATE_BYTES) {
-    state.log.pop();
-  }
-  if (standalone) { render(); return; }
+// Rolls and pool changes are announced rather than written. The GM's
+// background page is the only writer of room metadata; see applyEvent in
+// dnm.js for why.
+async function announce(ev) {
   try {
-    // Partial update: other extensions' metadata keys are left untouched.
-    await OBR.room.setMetadata({ [KEY]: state });
+    await OBR.broadcast.sendMessage(CHANNEL, ev, { destination: "ALL" });
   } catch (err) {
-    setStatus("Could not reach the room. That roll may not have been shared.");
-    console.error("[dnm-rolls] setMetadata failed", err);
+    setStatus("Could not reach the room. The others may not have seen that.");
+    console.error("[dnm] broadcast failed", err);
   }
 }
 
@@ -110,6 +107,7 @@ async function doRoll() {
   };
 
   if (role === "GM" && hiddenCheck.checked) {
+    // Never announced, so it cannot be read from the network by a player.
     hiddenLog.unshift({ ...entry, hidden: true });
     hiddenLog = hiddenLog.slice(0, MAX_LOG_ENTRIES);
     render();
@@ -117,27 +115,20 @@ async function doRoll() {
     return;
   }
 
-  // Re-read before writing so a roll that landed while this panel sat idle
-  // is not clobbered. Two simultaneous rolls can still race; last write
-  // wins, which is acceptable at a five-person table.
-  await load();
-  state.log.unshift(entry);
-  await save();
+  await announce({ type: "roll", entry });
   setStatus("");
 }
 
 async function stepPool(pool, delta) {
   if (pool === "threat" && role !== "GM") return;
-  await load();
-  state[pool] = Math.max(0, (state[pool] || 0) + delta);
-  await save();
+  // Pool events are deltas, so they are not applied optimistically. Applying
+  // locally and then again from the GM's update would double count.
+  await announce({ type: "pool", pool, delta });
 }
 
 async function clearLog() {
   if (role !== "GM") return;
-  await load();
-  state.log = [];
-  await save();
+  await announce({ type: "clear" });
   hiddenLog = [];
   setStatus("Log cleared.");
 }
@@ -270,6 +261,15 @@ async function startInOwlbear() {
     role = player.role;
     playerName = player.name || playerName;
     applyRole();
+    render();
+  });
+
+  // Optimistic local view. Roll entries carry an id and applyEvent
+  // deduplicates, so this can safely be applied again from the GM's update.
+  OBR.broadcast.onMessage(CHANNEL, (event) => {
+    const ev = event.data;
+    if (ev?.type !== "roll") return;
+    state = applyEvent(state, ev);
     render();
   });
 

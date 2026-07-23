@@ -7,6 +7,53 @@ export const ID = "com.thuknights.dnm-obr";
 export const CHAR_KEY = `${ID}/char`;
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
+export const CHANNEL = `${ID}/events`;
+
+export const EMPTY_STATE = { v: 1, momentum: 0, threat: 0, log: [] };
+export const MAX_LOG_ENTRIES = 40;
+export const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
+
+// -------------------------------------------------------------
+// Shared event reducer
+// -------------------------------------------------------------
+// Rolls and pool changes travel as broadcast events rather than each client
+// writing room metadata directly. Two reasons:
+//
+//   1. Broadcast is not role restricted, so a player can announce a roll even
+//      where a direct metadata write would be refused.
+//   2. It makes the GM the only writer. The previous read-modify-write from
+//      every client meant two simultaneous rolls could clobber each other.
+//
+// Every client applies events locally for an instant view; the GM's background
+// page applies the same events to room metadata so history survives refreshes
+// and late joins. Because both sides run this same function, they converge.
+//
+// Roll events carry an id and are deduplicated, so applying one twice is safe.
+// Pool events are deltas and cannot be, which is why clients do not apply them
+// optimistically and instead wait for the GM's metadata update.
+export function applyEvent(state, ev) {
+  const next = { ...EMPTY_STATE, ...state };
+  next.log = Array.isArray(next.log) ? next.log.slice() : [];
+
+  if (ev?.type === "roll" && ev.entry) {
+    if (next.log.some((e) => e.id === ev.entry.id)) return next;
+    next.log.unshift(ev.entry);
+    next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+  } else if (ev?.type === "pool" && (ev.pool === "momentum" || ev.pool === "threat")) {
+    next[ev.pool] = Math.max(0, (next[ev.pool] || 0) + (ev.delta || 0));
+  } else if (ev?.type === "clear") {
+    next.log = [];
+  }
+  return next;
+}
+
+// Trim to fit the room metadata budget before writing.
+export function trimState(state) {
+  const next = { ...state };
+  next.log = (next.log || []).slice(0, MAX_LOG_ENTRIES);
+  while (next.log.length > 1 && JSON.stringify(next).length > MAX_STATE_BYTES) next.log.pop();
+  return next;
+}
 
 export const ATTRS = { might: "Might", quickness: "Quickness", insight: "Insight", resolve: "Resolve" };
 export const SKILLS = {

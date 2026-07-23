@@ -24,7 +24,7 @@
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
 import {
-  ID, CHAR_KEY, ROOM_KEY, ATTRS, SKILLS,
+  ID, CHAR_KEY, CHANNEL, ATTRS, SKILLS,
   parseCode, rebuildCode, rollDice, resolveRoll, clamp,
 } from "./dnm.js";
 
@@ -449,16 +449,13 @@ async function doRoll() {
     gain: result.momentumGained,
   };
 
-  // Written into the same shared log the roller popover reads, so a roll made
-  // from the sheet appears for the whole table exactly like any other.
+  // Announced on the same channel the roller uses, so a roll made from the
+  // sheet reaches the whole table exactly like any other.
   try {
-    const meta = await OBR.room.getMetadata();
-    const state = meta[ROOM_KEY] || { v: 1, momentum: 0, threat: 0, log: [] };
-    state.log = [entry, ...(state.log || [])].slice(0, 40);
-    await OBR.room.setMetadata({ [ROOM_KEY]: state });
+    await OBR.broadcast.sendMessage(CHANNEL, { type: "roll", entry }, { destination: "ALL" });
   } catch (err) {
-    setStatus("Rolled, but the log could not be shared.");
-    console.error("[dnm] log write failed", err);
+    setStatus("Rolled, but the others may not have seen it.");
+    console.error("[dnm] broadcast failed", err);
     return;
   }
 
