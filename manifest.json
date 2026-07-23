@@ -1,0 +1,14 @@
+{
+  "name": "Dreams & Machines — Rolls",
+  "version": "0.1.0",
+  "manifest_version": 1,
+  "author": "Thuk Knights",
+  "description": "Shared 2d20 rolls, a persistent roll log, and Momentum/Threat pools for Dreams & Machines.",
+  "action": {
+    "title": "D&M Rolls",
+    "icon": "https://REPLACE_ME.github.io/dnm-rolls/icon.svg",
+    "popover": "https://REPLACE_ME.github.io/dnm-rolls/index.html",
+    "height": 620,
+    "width": 400
+  }
+}

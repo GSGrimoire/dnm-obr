@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>D&amp;M Rolls</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Shared pools -->
+  <section class="pools">
+    <div class="pool" id="pool-momentum">
+      <span class="pool-label">Momentum</span>
+      <div class="pool-controls">
+        <button class="step" data-pool="momentum" data-delta="-1" aria-label="Decrease momentum">&minus;</button>
+        <span class="pool-value" id="momentum-value">0</span>
+        <button class="step" data-pool="momentum" data-delta="1" aria-label="Increase momentum">+</button>
+      </div>
+    </div>
+    <div class="pool" id="pool-threat">
+      <span class="pool-label">Threat</span>
+      <div class="pool-controls">
+        <button class="step" data-pool="threat" data-delta="-1" aria-label="Decrease threat">&minus;</button>
+        <span class="pool-value" id="threat-value">0</span>
+        <button class="step" data-pool="threat" data-delta="1" aria-label="Increase threat">+</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Roll form -->
+  <section class="roller">
+    <input type="text" id="roll-label" placeholder="What are you testing? (optional)" maxlength="60">
+
+    <div class="grid-3">
+      <label>Attribute
+        <input type="number" id="attr" min="0" max="20" value="8">
+      </label>
+      <label>Skill
+        <input type="number" id="skill" min="0" max="20" value="2">
+      </label>
+      <label>TN
+        <output id="tn">10</output>
+      </label>
+    </div>
+
+    <div class="grid-2">
+      <label>Dice
+        <div class="segmented" id="dice-seg">
+          <button data-dice="1">1</button>
+          <button data-dice="2" class="on">2</button>
+          <button data-dice="3">3</button>
+          <button data-dice="4">4</button>
+          <button data-dice="5">5</button>
+        </div>
+      </label>
+      <label>Difficulty
+        <div class="segmented" id="diff-seg">
+          <button data-diff="0">0</button>
+          <button data-diff="1" class="on">1</button>
+          <button data-diff="2">2</button>
+          <button data-diff="3">3</button>
+          <button data-diff="4">4</button>
+          <button data-diff="5">5</button>
+        </div>
+      </label>
+    </div>
+
+    <details class="advanced">
+      <summary>Thresholds</summary>
+      <div class="grid-2">
+        <label>Critical on &le;
+          <input type="number" id="crit" min="0" max="20" value="1">
+        </label>
+        <label>Complication on &ge;
+          <input type="number" id="comp" min="1" max="20" value="20">
+        </label>
+      </div>
+    </details>
+
+    <div class="roll-row">
+      <label class="hidden-toggle" id="hidden-wrap" hidden>
+        <input type="checkbox" id="hidden-roll">
+        <span>Hidden</span>
+      </label>
+      <button id="roll-btn" class="primary">Roll</button>
+    </div>
+  </section>
+
+  <!-- Log -->
+  <section class="log-section">
+    <div class="log-header">
+      <h2>Roll log</h2>
+      <button id="clear-log" class="ghost" hidden>Clear</button>
+    </div>
+    <ol id="log" class="log"></ol>
+  </section>
+
+  <p id="status" class="status"></p>
+</div>
+
+<script type="module" src="roller.js"></script>
+</body>
+</html>
