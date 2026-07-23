@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "manifest_version": 1,
   "author": "GS Grimoire",
-  "description": "Skill Tests, a shared roll log, Momentum and Threat pools, and character sheets imported from the Dreams & Machines character creator.",
+  "description": "Dreams and Machines character sheet roller",
   "background": "https://gsgrimoire.github.io/dnm-obr/background.html",
   "action": {
     "title": "D&M Rolls",
