@@ -12,9 +12,9 @@ GitHub repo with Pages turned on.
 
 ### 1. Make the repo
 
-On GitHub, create a new public repository called `dnm-rolls`. Public matters: Pages on
-a private repo needs a paid plan, and players' browsers have to be able to reach the
-files anyway.
+The repo is `GSGrimoire/dnm-obr` and it is already public with Pages deployed. The name
+does not matter to Owlbear at all, it only has to match the URLs in the manifest, which
+it now does.
 
 Upload all five files to the root of it:
 
@@ -28,42 +28,32 @@ icon.svg
 
 You can drag them into the GitHub web uploader. Nothing needs installing locally.
 
-### 2. Turn on Pages
+### 2. Pages
 
-Repo → Settings → Pages. Under "Build and deployment", set Source to **Deploy from a
-branch**, branch **main**, folder **/ (root)**. Save.
-
-Wait a minute or two, then check that this loads in a browser tab:
+Already on. Check this loads in a browser tab:
 
 ```
-https://YOURNAME.github.io/dnm-rolls/index.html
+https://gsgrimoire.github.io/dnm-obr/index.html
 ```
 
 You should see the roller with a "Standalone preview" note at the bottom. It rolls dice
 locally so you can check the layout and the maths before touching Owlbear.
 
-### 3. Fix the two URLs in the manifest
+### 3. The manifest URLs
 
-Open `manifest.json` on GitHub, click the pencil icon, and replace `REPLACE_ME` with your
-GitHub username in both places. It should end up looking like:
+Already filled in for `gsgrimoire.github.io/dnm-obr`. Nothing to edit.
 
-```json
-"icon": "https://gusexample.github.io/dnm-rolls/icon.svg",
-"popover": "https://gusexample.github.io/dnm-rolls/index.html"
-```
-
-Case matters. Commit the change.
-
-These are absolute URLs on purpose. Owlbear resolves a leading-slash path against the
-site root, which on a GitHub project page is `yourname.github.io`, not your repo folder.
-Absolute URLs sidestep that entirely.
+They are absolute URLs on purpose. Owlbear resolves a leading-slash path against the site
+root, which on a GitHub project page is `gsgrimoire.github.io`, not the repo folder.
+Absolute URLs sidestep that. If the repo is ever renamed, these two lines are the only
+thing that has to change.
 
 ### 4. Install it in Owlbear
 
 In your Owlbear Rodeo profile, click **Add Extension** and paste:
 
 ```
-https://YOURNAME.github.io/dnm-rolls/manifest.json
+https://gsgrimoire.github.io/dnm-obr/manifest.json
 ```
 
 Then create a room, or open an existing one, and enable the extension. A d20 icon appears
@@ -103,23 +93,24 @@ other. At a five-person table this is rare enough to ignore.
 
 ---
 
-## Not settled yet
+## The rules it implements
 
-The roll engine is parameterised rather than hard-coded to Dreams & Machines, because the
-rulebook specifics still need checking against the roller already built into
-`dnm-character-creator.html` v1.10.
+Taken directly from `classifyDie()` in `dnm-character-creator.html` v1.10, so the
+extension and the character creator can never disagree:
 
-Currently assumed:
+- A natural 20 is a Complication and nothing else
+- A die at or under the **Skill** value is a Critical, worth 2 successes
+- A die at or under the **Attribute** value is 1 success
+- Anything else does nothing
+- Successes beyond the Difficulty become Momentum
 
-- Target number is Attribute + Skill, capped at 20
-- A die at or under the TN is one success
-- A die at or under the critical threshold (default 1) is two successes
-- A die at or above the complication threshold (default 20) generates a complication
-- Successes beyond the difficulty become Momentum
+The target number is the Attribute on its own. The Skill sets the critical range rather
+than adding to the target. The order matters: 20 is checked first, so a natural 20 can
+never also count as a success.
 
-The critical and complication thresholds are editable in the panel under "Thresholds", so
-the extension is usable while these are confirmed. If D&M drives the critical range off a
-focus value, that becomes an automatic calculation instead of a manual field.
+One quirk inherited from the creator: if a Skill value is ever higher than the Attribute
+value, dice between the two count as Criticals. Probably never comes up in play, but the
+extension behaves the same way the creator does rather than silently diverging.
 
-The colour palette in `style.css` is a placeholder. The variables at the top of that file
-are the only thing that needs changing to match the character creator.
+Exhaustion is not modelled. The creator blocks rolls against a shut-down Attribute, which
+needs the character sheet to know about; that arrives with character import.

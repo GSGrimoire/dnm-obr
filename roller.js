@@ -1,34 +1,35 @@
 // =============================================================
 // Dreams & Machines — Rolls
 // -------------------------------------------------------------
-// A shared 2d20 roller for Owlbear Rodeo.
+// A shared Skill Test roller for Owlbear Rodeo.
 //
-// WHY THIS SHAPE:
-// The roll log and the Momentum/Threat pools are stored in Owlbear's
-// ROOM METADATA rather than being sent as broadcast messages. Broadcast
-// is fire-and-forget: anyone who joins late, refreshes, or drops their
-// connection misses whatever was sent while they were away. Room metadata
-// is synced state, so a new joiner sees the existing log immediately and a
-// refresh loses nothing. That removes the whole class of reconnect and
-// ordering bugs we would otherwise have to handle ourselves.
+// STORAGE:
+// The roll log and the Momentum/Threat pools live in Owlbear's ROOM
+// METADATA rather than being sent as broadcast messages. Broadcast is
+// fire-and-forget: anyone who joins late, refreshes, or drops connection
+// misses whatever was sent while they were away. Room metadata is synced
+// state, so a late joiner sees the existing log and a refresh loses
+// nothing. That removes the whole class of reconnect and ordering bugs.
 //
-// The cost is a size cap: Owlbear allows 16 kB of room metadata TOTAL,
-// shared across every extension installed in the room. We therefore trim
-// the log aggressively (see MAX_LOG_ENTRIES and the byte guard in save()).
+// The cost is a size cap: Owlbear allows 16 kB of room metadata TOTAL
+// across every extension in the room, so the log trims itself.
 //
 // HIDDEN ROLLS:
-// A hidden roll is never written to room metadata at all, so it cannot be
-// read out of the network response or devtools by a player. It lives only
-// in the GM's own browser for the current session. See HIDDEN NOTE below.
+// A hidden roll is never written to room metadata, so a player cannot read
+// it out of devtools. It lives only in the GM's open panel for the session.
 // =============================================================
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
 
-// Namespaced so we do not collide with other extensions in the same room.
 const KEY = "com.thuknights.dnm-rolls/state";
-
 const MAX_LOG_ENTRIES = 40;
-const MAX_STATE_BYTES = 11000; // stay well under the shared 16 kB room budget
+const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
+
+const ATTRS = { might: "Might", quickness: "Quickness", insight: "Insight", resolve: "Resolve" };
+const SKILLS = {
+  fight: "Fight", move: "Move", operate: "Operate", sneak: "Sneak",
+  study: "Study", survive: "Survive", talk: "Talk",
+};
 
 const EMPTY_STATE = { v: 1, momentum: 0, threat: 0, log: [] };
 
@@ -36,66 +37,46 @@ let state = structuredClone(EMPTY_STATE);
 let role = "PLAYER";
 let playerName = "Someone";
 let standalone = false;
-
-// HIDDEN NOTE: hidden rolls are session-only and live in this array.
-// They are deliberately not persisted anywhere shared. If the GM closes
-// the panel they are gone, which is fine for "did the guard notice you"
-// rolls. Persisting them would mean writing them somewhere a player's
-// browser could reach.
 let hiddenLog = [];
-
-// -------------------------------------------------------------
-// Element handles
-// -------------------------------------------------------------
-const el = (id) => document.getElementById(id);
-const attrEl = el("attr");
-const skillEl = el("skill");
-const tnEl = el("tn");
-const critEl = el("crit");
-const compEl = el("comp");
-const labelEl = el("roll-label");
-const logEl = el("log");
-const statusEl = el("status");
-const hiddenWrap = el("hidden-wrap");
-const hiddenCheck = el("hidden-roll");
-const clearBtn = el("clear-log");
-
 let diceCount = 2;
 let difficulty = 1;
 
 // -------------------------------------------------------------
 // Roll engine
 // -------------------------------------------------------------
-// Generic 2d20: each die at or under the target number scores a success.
-// A die at or under the critical threshold scores two. A die at or above
-// the complication threshold generates a complication.
+// These rules are lifted directly from classifyDie() in
+// dnm-character-creator.html v1.10 so that the extension and the character
+// creator can never disagree about what a roll means:
 //
-// The thresholds are exposed in the UI rather than hard-coded because the
-// D&M rulebook specifics (particularly whether the critical range is driven
-// by a focus value) still need confirming against the character creator's
-// existing roller.
+//   - a natural 20 is a Complication and nothing else
+//   - a die at or under the SKILL value is a Critical, worth 2 successes
+//   - a die at or under the ATTRIBUTE value is 1 success
+//   - anything else fails
+//
+// Note the target number is the Attribute on its own. The Skill is the
+// critical range, not an addition to the target. The order of the checks
+// matters: 20 is tested first, so a 20 can never also count as a success.
+function classifyDie(value, attrValue, skillValue) {
+  if (value === 20) return "complication";
+  if (value <= skillValue) return "crit";
+  if (value <= attrValue) return "success";
+  return "fail";
+}
+
 function rollDice(n) {
   const out = [];
   for (let i = 0; i < n; i++) out.push(1 + Math.floor(Math.random() * 20));
   return out;
 }
 
-function resolve(dice, tn, critAt, compAt, diff) {
+function resolve(dice, attrValue, skillValue, diff) {
   let successes = 0;
   let complications = 0;
   const detail = dice.map((d) => {
-    let kind = "miss";
-    if (d <= critAt) {
-      successes += 2;
-      kind = "crit";
-    } else if (d <= tn) {
-      successes += 1;
-      kind = "hit";
-    }
-    if (d >= compAt) {
-      complications += 1;
-      kind = kind === "miss" ? "comp" : kind + " comp";
-    }
+    const kind = classifyDie(d, attrValue, skillValue);
+    if (kind === "crit") successes += 2;
+    else if (kind === "success") successes += 1;
+    else if (kind === "complication") complications += 1;
     return { d, kind };
   });
   return {
@@ -108,6 +89,23 @@ function resolve(dice, tn, critAt, compAt, diff) {
 }
 
 // -------------------------------------------------------------
+// Elements
+// -------------------------------------------------------------
+const el = (id) => document.getElementById(id);
+const attrKeyEl = el("attr-key");
+const attrValEl = el("attr-val");
+const skillKeyEl = el("skill-key");
+const skillValEl = el("skill-val");
+const charEl = el("char-name");
+const labelEl = el("roll-label");
+const hintEl = el("rule-hint");
+const logEl = el("log");
+const statusEl = el("status");
+const hiddenWrap = el("hidden-wrap");
+const hiddenCheck = el("hidden-roll");
+const clearBtn = el("clear-log");
+
+// -------------------------------------------------------------
 // Shared state
 // -------------------------------------------------------------
 async function load() {
@@ -118,47 +116,42 @@ async function load() {
 }
 
 async function save() {
-  // Trim by count first, then by bytes, so we never exceed the room budget.
   state.log = state.log.slice(0, MAX_LOG_ENTRIES);
   while (state.log.length > 1 && JSON.stringify(state).length > MAX_STATE_BYTES) {
     state.log.pop();
   }
-
-  if (standalone) {
-    render();
-    return;
-  }
-
+  if (standalone) { render(); return; }
   try {
-    // Partial update: this key is spread into the existing metadata, so
-    // other extensions' keys are left alone.
+    // Partial update: other extensions' metadata keys are left untouched.
     await OBR.room.setMetadata({ [KEY]: state });
   } catch (err) {
-    setStatus("Could not save to the room. Your roll may not have reached the others.");
+    setStatus("Could not reach the room. That roll may not have been shared.");
     console.error("[dnm-rolls] setMetadata failed", err);
   }
 }
 
-function setStatus(msg) {
-  statusEl.textContent = msg || "";
-}
+const setStatus = (msg) => { statusEl.textContent = msg || ""; };
+
+const clamp = (n, lo, hi) => (Number.isNaN(n) ? lo : Math.min(hi, Math.max(lo, n)));
 
 // -------------------------------------------------------------
 // Actions
 // -------------------------------------------------------------
 async function doRoll() {
-  const tn = currentTN();
-  const critAt = clamp(+critEl.value, 0, 20);
-  const compAt = clamp(+compEl.value, 1, 20);
+  const attrValue = clamp(+attrValEl.value, 0, 20);
+  const skillValue = clamp(+skillValEl.value, 0, 20);
   const dice = rollDice(diceCount);
-  const result = resolve(dice, tn, critAt, compAt, difficulty);
+  const result = resolve(dice, attrValue, skillValue, difficulty);
 
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     t: Date.now(),
-    who: playerName,
-    label: labelEl.value.trim().slice(0, 60),
-    tn,
+    who: charEl.value.trim().slice(0, 24) || playerName,
+    label: labelEl.value.trim().slice(0, 40),
+    an: ATTRS[attrKeyEl.value],
+    av: attrValue,
+    sn: SKILLS[skillKeyEl.value],
+    sv: skillValue,
     diff: difficulty,
     detail: result.detail,
     succ: result.successes,
@@ -167,9 +160,7 @@ async function doRoll() {
     gain: result.momentumGained,
   };
 
-  const isHidden = role === "GM" && hiddenCheck.checked;
-
-  if (isHidden) {
+  if (role === "GM" && hiddenCheck.checked) {
     hiddenLog.unshift({ ...entry, hidden: true });
     hiddenLog = hiddenLog.slice(0, MAX_LOG_ENTRIES);
     render();
@@ -177,9 +168,9 @@ async function doRoll() {
     return;
   }
 
-  // Re-read before writing so we do not clobber a roll that landed while
-  // this panel was idle. Two truly simultaneous rolls can still race;
-  // last write wins. Acceptable at a five-person table.
+  // Re-read before writing so a roll that landed while this panel sat idle
+  // is not clobbered. Two simultaneous rolls can still race; last write
+  // wins, which is acceptable at a five-person table.
   await load();
   state.log.unshift(entry);
   await save();
@@ -205,30 +196,17 @@ async function clearLog() {
 // -------------------------------------------------------------
 // Rendering
 // -------------------------------------------------------------
-function currentTN() {
-  const tn = clamp(+attrEl.value, 0, 20) + clamp(+skillEl.value, 0, 20);
-  return clamp(tn, 0, 20);
-}
-
-function clamp(n, lo, hi) {
-  if (Number.isNaN(n)) return lo;
-  return Math.min(hi, Math.max(lo, n));
-}
-
-function updateTN() {
-  tnEl.textContent = String(currentTN());
+function updateHint() {
+  const a = clamp(+attrValEl.value, 0, 20);
+  const s = clamp(+skillValEl.value, 0, 20);
+  hintEl.textContent = `Success on ${a} or under · Critical on ${s} or under · Complication on 20`;
 }
 
 function render() {
   el("momentum-value").textContent = state.momentum ?? 0;
   el("threat-value").textContent = state.threat ?? 0;
+  document.querySelectorAll('[data-pool="threat"]').forEach((b) => { b.disabled = role !== "GM"; });
 
-  document
-    .querySelectorAll('[data-pool="threat"]')
-    .forEach((b) => (b.disabled = role !== "GM"));
-
-  // Hidden entries are merged in locally for the GM only, sorted by time
-  // alongside the shared ones so the log reads as one sequence.
   const merged = [...state.log, ...hiddenLog].sort((a, b) => b.t - a.t);
 
   logEl.innerHTML = "";
@@ -239,10 +217,7 @@ function render() {
     logEl.append(li);
     return;
   }
-
-  for (const e of merged) {
-    logEl.append(renderEntry(e));
-  }
+  for (const e of merged) logEl.append(renderEntry(e));
 }
 
 function renderEntry(e) {
@@ -262,24 +237,27 @@ function renderEntry(e) {
   }
   li.append(head);
 
+  const test = document.createElement("div");
+  test.className = "entry-test";
+  test.textContent = `${e.an} ${e.av} (${e.sn} ${e.sv}) · ${e.detail.length}d20`;
+  li.append(test);
+
   const dice = document.createElement("div");
   dice.className = "dice";
   for (const d of e.detail) {
     const b = document.createElement("span");
     b.className = "die " + d.kind;
     b.textContent = d.d;
+    b.title = { crit: "Critical (2 successes)", success: "Success", complication: "Complication", fail: "No effect" }[d.kind];
     dice.append(b);
   }
   li.append(dice);
 
   const sum = document.createElement("div");
   sum.className = "entry-sum " + (e.pass ? "pass" : "fail");
-  const parts = [
-    `${e.succ} ${e.succ === 1 ? "success" : "successes"} vs difficulty ${e.diff}`,
-    `TN ${e.tn}`,
-  ];
+  const parts = [`${e.succ} ${e.succ === 1 ? "success" : "successes"} vs D${e.diff}`];
+  parts.push(e.pass ? "passed" : "failed");
   if (e.pass && e.gain > 0) parts.push(`+${e.gain} Momentum`);
-  if (!e.pass) parts.push("failed");
   if (e.comp > 0) parts.push(`${e.comp} complication${e.comp === 1 ? "" : "s"}`);
   sum.textContent = parts.join(" · ");
   li.append(sum);
@@ -290,9 +268,13 @@ function renderEntry(e) {
 // -------------------------------------------------------------
 // Wiring
 // -------------------------------------------------------------
+function setSegmented(containerId, active) {
+  el(containerId).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === active));
+}
+
 function wireUI() {
-  attrEl.addEventListener("input", updateTN);
-  skillEl.addEventListener("input", updateTN);
+  attrValEl.addEventListener("input", updateHint);
+  skillValEl.addEventListener("input", updateHint);
 
   el("dice-seg").addEventListener("click", (ev) => {
     const btn = ev.target.closest("[data-dice]");
@@ -314,14 +296,7 @@ function wireUI() {
 
   el("roll-btn").addEventListener("click", doRoll);
   clearBtn.addEventListener("click", clearLog);
-
-  updateTN();
-}
-
-function setSegmented(containerId, active) {
-  el(containerId)
-    .querySelectorAll("button")
-    .forEach((b) => b.classList.toggle("on", b === active));
+  updateHint();
 }
 
 function applyRole() {
@@ -336,12 +311,13 @@ function applyRole() {
 async function startInOwlbear() {
   role = await OBR.player.getRole();
   playerName = (await OBR.player.getName()) || "Someone";
+  if (!charEl.value) charEl.value = playerName;
   applyRole();
 
   await load();
   render();
 
-  OBR.player.onChange(async (player) => {
+  OBR.player.onChange((player) => {
     role = player.role;
     playerName = player.name || playerName;
     applyRole();
@@ -356,12 +332,12 @@ async function startInOwlbear() {
 }
 
 function startStandalone() {
-  // Opening index.html directly in a browser tab runs the panel with local
-  // state only. Useful for checking the layout and the roll maths before
-  // installing the extension into a room.
+  // Opening index.html directly in a tab runs with local state only, so the
+  // layout and the roll maths can be checked before installing anything.
   standalone = true;
   role = "GM";
   playerName = "Local test";
+  charEl.value = playerName;
   applyRole();
   render();
   setStatus("Standalone preview. Not connected to an Owlbear room.");

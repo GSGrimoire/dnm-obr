@@ -4,50 +4,79 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>D&amp;M Rolls</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Exo+2:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="app">
 
-  <!-- Shared pools -->
   <section class="pools">
-    <div class="pool" id="pool-momentum">
+    <div class="pool">
       <span class="pool-label">Momentum</span>
       <div class="pool-controls">
-        <button class="step" data-pool="momentum" data-delta="-1" aria-label="Decrease momentum">&minus;</button>
+        <button class="step" data-pool="momentum" data-delta="-1" aria-label="Spend momentum">&minus;</button>
         <span class="pool-value" id="momentum-value">0</span>
-        <button class="step" data-pool="momentum" data-delta="1" aria-label="Increase momentum">+</button>
+        <button class="step" data-pool="momentum" data-delta="1" aria-label="Gain momentum">+</button>
       </div>
     </div>
-    <div class="pool" id="pool-threat">
+    <div class="pool threat">
       <span class="pool-label">Threat</span>
       <div class="pool-controls">
-        <button class="step" data-pool="threat" data-delta="-1" aria-label="Decrease threat">&minus;</button>
+        <button class="step" data-pool="threat" data-delta="-1" aria-label="Spend threat">&minus;</button>
         <span class="pool-value" id="threat-value">0</span>
-        <button class="step" data-pool="threat" data-delta="1" aria-label="Increase threat">+</button>
+        <button class="step" data-pool="threat" data-delta="1" aria-label="Add threat">+</button>
       </div>
     </div>
   </section>
 
-  <!-- Roll form -->
   <section class="roller">
-    <input type="text" id="roll-label" placeholder="What are you testing? (optional)" maxlength="60">
-
-    <div class="grid-3">
-      <label>Attribute
-        <input type="number" id="attr" min="0" max="20" value="8">
+    <div class="grid-2">
+      <label>Character
+        <input type="text" id="char-name" placeholder="Name" maxlength="24">
       </label>
-      <label>Skill
-        <input type="number" id="skill" min="0" max="20" value="2">
-      </label>
-      <label>TN
-        <output id="tn">10</output>
+      <label>Testing
+        <input type="text" id="roll-label" placeholder="optional" maxlength="40">
       </label>
     </div>
 
+    <div class="stat-row">
+      <label class="stat-pick">Attribute
+        <select id="attr-key">
+          <option value="might">Might</option>
+          <option value="quickness">Quickness</option>
+          <option value="insight">Insight</option>
+          <option value="resolve">Resolve</option>
+        </select>
+      </label>
+      <label class="stat-val">Value
+        <input type="number" id="attr-val" min="0" max="20" value="9">
+      </label>
+    </div>
+
+    <div class="stat-row">
+      <label class="stat-pick">Skill
+        <select id="skill-key">
+          <option value="fight">Fight</option>
+          <option value="move">Move</option>
+          <option value="operate">Operate</option>
+          <option value="sneak">Sneak</option>
+          <option value="study">Study</option>
+          <option value="survive">Survive</option>
+          <option value="talk">Talk</option>
+        </select>
+      </label>
+      <label class="stat-val">Value
+        <input type="number" id="skill-val" min="0" max="20" value="2">
+      </label>
+    </div>
+
+    <p class="rule-hint" id="rule-hint"></p>
+
     <div class="grid-2">
-      <label>Dice
+      <label>d20s
         <div class="segmented" id="dice-seg">
           <button data-dice="1">1</button>
           <button data-dice="2" class="on">2</button>
@@ -68,18 +97,6 @@
       </label>
     </div>
 
-    <details class="advanced">
-      <summary>Thresholds</summary>
-      <div class="grid-2">
-        <label>Critical on &le;
-          <input type="number" id="crit" min="0" max="20" value="1">
-        </label>
-        <label>Complication on &ge;
-          <input type="number" id="comp" min="1" max="20" value="20">
-        </label>
-      </div>
-    </details>
-
     <div class="roll-row">
       <label class="hidden-toggle" id="hidden-wrap" hidden>
         <input type="checkbox" id="hidden-roll">
@@ -89,7 +106,6 @@
     </div>
   </section>
 
-  <!-- Log -->
   <section class="log-section">
     <div class="log-header">
       <h2>Roll log</h2>

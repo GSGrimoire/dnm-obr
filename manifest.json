@@ -1,14 +1,14 @@
 {
   "name": "Dreams & Machines — Rolls",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "manifest_version": 1,
-  "author": "Thuk Knights",
-  "description": "Shared 2d20 rolls, a persistent roll log, and Momentum/Threat pools for Dreams & Machines.",
+  "author": "GS Grimoire",
+  "description": "Shared Skill Tests, a persistent roll log, and Momentum/Threat pools for Dreams & Machines.",
   "action": {
     "title": "D&M Rolls",
-    "icon": "https://REPLACE_ME.github.io/dnm-rolls/icon.svg",
-    "popover": "https://REPLACE_ME.github.io/dnm-rolls/index.html",
-    "height": 620,
+    "icon": "https://gsgrimoire.github.io/dnm-obr/icon.svg",
+    "popover": "https://gsgrimoire.github.io/dnm-obr/index.html",
+    "height": 640,
     "width": 400
   }
 }
