@@ -3,7 +3,7 @@
 <!--
   ============================================================
   Dreams & Machines — Character Creator
-  Version: 1.12
+  Version: 1.13
   File:    dnm-character-creator.html (stable filename; do not version the filename)
   Docs:    CHANGELOG.html (player-facing) / UPGRADE_NOTES.md (cumulative technical log)
 
@@ -2381,7 +2381,7 @@ body::after {
 // Update this constant on every release; the header link and the
 // character sheet stamp both read from it.
 // ============================================================
-const APP_VERSION = '1.12';
+const APP_VERSION = '1.13';
 
 // ============================================================
 // GAME DATA - Dreams & Machines Character Creator
@@ -4741,6 +4741,83 @@ function parseTalentSelection(value, archetypeKey) {
 // state in exactly one place is what makes an Owlbear round trip lossless:
 // the extension can edit CP and re-emit the code without SN going stale.
 // ---------------------------------------------------------------
+// v1.13: snapshot helpers. These mirror the sheet's own item renderers but return
+// data instead of HTML, so the Owlbear sheet can reproduce the inventory block
+// without a copy of itemCategoryInfo, equipmentPropertyInfo, or the trait tables.
+// A tag carries a key into the extension's static tooltip tables rather than the
+// tooltip text itself. Tooltip text is identical for every character who owns the
+// item, so shipping it in every code costs roughly 1.8 kB per item to say the same
+// thing. The exception is a trait whose text is composed from the item it sits on
+// (Powered reads differently on a weapon, on armor, and on the Illuminator), which
+// no static table can answer; those resolve inline.
+function snapshotTag(label, info, key) {
+  const tag = { label: String(label) };
+  if (key) tag.k = key;
+  else if (info) { tag.name = info.name || ''; tag.desc = info.desc || ''; }
+  return tag;
+}
+
+function snapshotTraitTag(quality, item) {
+  const key = equipmentLookupKey(quality);
+  const resolved = getEquipmentTraitInfo(quality, item);
+  const table = DM_DATA.equipmentTraitInfo?.[key];
+  const sameAsTable = table && resolved
+    && table.name === resolved.name && table.desc === resolved.desc;
+  if (sameAsTable) return { label: String(quality), k: 'trait:' + key };
+  return snapshotTag(quality, resolved);
+}
+
+function snapshotItemTags(item) {
+  const tags = [];
+  const P = k => 'prop:' + k;
+  if (item.category) tags.push(snapshotTag(item.category, null, 'cat:' + item.category));
+  const atoma = Array.isArray(item.atomaCategory) ? item.atomaCategory : (item.atomaCategory ? [item.atomaCategory] : []);
+  atoma.forEach(cat => tags.push(snapshotTag(cat, null, 'mfg:' + equipmentLookupKey(cat))));
+  if (item.category !== 'glif' && item.techLevel != null) tags.push(snapshotTag(`TL ${item.techLevel}`, null, 'tl:' + item.techLevel));
+  if (item.category === 'glif' && item.complexity != null) tags.push(snapshotTag(`CPLX ${item.complexity}`, null, P('complexity')));
+  if (item.type) tags.push(snapshotTag(item.type, null, P('type')));
+  if (item.damage != null) {
+    const injury = item.injury ? ` ${item.injury}${item.injuryCount ? ' x' + item.injuryCount : ''}` : '';
+    tags.push(snapshotTag(`DMG ${item.damage}${injury}`, null, P('damage')));
+  }
+  if (item.damageOptions) tags.push(snapshotTag('Multi-mode', null, P('damageOptions')));
+  if (item.protection != null) tags.push(snapshotTag(`PROT ${item.protection}`, null, P('protection')));
+  if (item.breakerProtection != null) tags.push(snapshotTag(`BRK ${item.breakerProtection}`, null, P('breakerProtection')));
+  if (item.cover) tags.push(snapshotTag(item.cover, null, 'cover:' + equipmentLookupKey(item.cover).replace(/-\d+$/, '')));
+  if (item.scale != null) tags.push(snapshotTag(`Scale ${item.scale}`, null, P('scale')));
+  if (item.passengers != null) tags.push(snapshotTag(`${item.passengers} pax`, null, P('passengers')));
+  if (item.speed != null) tags.push(snapshotTag(`Speed ${item.speed}`, null, P('speed')));
+  if (item.quantity != null) tags.push(snapshotTag(`Qty ${item.quantity}`, null, P('quantity')));
+  if (item.supplyPointCost != null) tags.push(snapshotTag(`${item.supplyPointCost} SP to craft`, null, P('supplyPointCost')));
+  if (item.cost != null) tags.push(snapshotTag(`${item.cost} coin`, null, P('cost')));
+  else if (item.costNotListed) tags.push(snapshotTag('cost n/a', null, P('costNotListed')));
+  if (item.rarity != null) tags.push(snapshotTag(`Rarity ${item.rarity}`, null, 'rarity:' + item.rarity));
+  (item.qualities || []).forEach(q => tags.push(snapshotTraitTag(q, item)));
+  return tags;
+}
+
+function snapshotEffects(list) {
+  return (Array.isArray(list) ? list : []).map(e => ({
+    label: e.label || '',
+    rulesText: e.rulesText || ''
+  })).filter(e => e.label || e.rulesText);
+}
+
+// Resolved 'EQUIPPED +N' breakdowns, so the sheet can print the same footnote the
+// creator does under Supply Points without recomputing equip effects.
+function snapshotResourceBreakdown() {
+  const out = {};
+  ['spirit', 'supply', 'coin', 'momentum'].forEach(resource => {
+    const sources = getResourceModifierSources(resource, 'max');
+    if (!sources.length) return;
+    out[resource] = {
+      total: sources.reduce((sum, s) => sum + (Number(s.effect.value) || 0), 0),
+      items: sources.map(s => s.item.name)
+    };
+  });
+  return out;
+}
+
 function buildOwlbearSnapshot() {
   const c = state.character;
   const stats = computeStats();
@@ -4777,6 +4854,13 @@ function buildOwlbearSnapshot() {
     if (!it) {
       return { id: ref.id, name: ref.id, qty: ref.qty || 1, equipped: !!ref.equipped };
     }
+    // v1.13: the light facts stay here, and the heavy static text (full description,
+    // tooltip tags, effect notes, rules and availability notes) is published once to
+    // the extension's rules file instead. Measured: carrying it inline cost about
+    // 3.3 kB per item and would have made code length scale with inventory size, to
+    // say the same words for every character who owns the same spear. An extension
+    // with a stale rules file still renders these fields, just without the extras.
+    const powered = getPoweredQuality(it);
     return {
       id: it.id,
       name: it.name,
@@ -4790,7 +4874,8 @@ function buildOwlbearSnapshot() {
       injury: it.injury || null,
       protection: it.protection != null ? it.protection : null,
       qualities: it.qualities || [],
-      description: it.description || ''
+      description: it.description || '',
+      powered: powered ? { label: powered.label, recharge: powered.recharge, tier: powered.tier, trackDischarge: powered.trackDischarge } : null
     };
   });
 
@@ -4813,8 +4898,10 @@ function buildOwlbearSnapshot() {
     desc: DM_DATA.bondInfo?.[b.type]?.desc || ''
   }));
 
+  const maxes = getResourceMaxes();
+
   return {
-    v: 2,
+    v: 3,
     from: APP_VERSION,
     name: c.name || '',
     pronouns: c.pronouns || '',
@@ -4826,6 +4913,11 @@ function buildOwlbearSnapshot() {
     temperament: temperamentData ? temperamentData.name : null,
     temperamentDesc: temperamentData ? (temperamentData.description || '') : '',
     temperamentExhaustion: temperamentData ? (temperamentData.exhaustion || '') : '',
+    temperamentDrive: temperamentData ? (temperamentData.drive || '') : '',
+    temperamentAttitude: temperamentData ? (temperamentData.attitude || '') : '',
+    archetypeGoal: archetypeData ? (archetypeData.goals || '') : '',
+    startingEquipment: archetypeData ? (archetypeData.equipment || '') : '',
+    originSpecialNote: originData ? (originData.specialNote || '') : '',
     abilities,
     exhaustionTypes,
     attrs: stats.attrs,
@@ -4833,6 +4925,10 @@ function buildOwlbearSnapshot() {
     techLevel: stats.techLevel,
     spiritMax: stats.spiritPool,
     supplyMax: stats.supplyPoints,
+    coinMax: maxes.coin,
+    growthMax: maxes.growth,
+    momentumMax: maxes.momentum,
+    resourceBreakdown: snapshotResourceBreakdown(),
     talents,
     items,
     truths: c.truths || [],

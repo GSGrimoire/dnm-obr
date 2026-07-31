@@ -13,25 +13,42 @@
 // The cost is that each edit rewrites a few kB of item metadata, so writes
 // are debounced. See queueSave().
 //
+// WHERE THE CONTENT COMES FROM:
+// Two sources, split by whether a value depends on the character.
+//   · the code's SN segment — computed, per character: attributes, skills,
+//     maxima, resolved talents and abilities, item facts
+//   · rules.js — static, identical for everyone: tooltip tables, full item
+//     descriptions, effect notes. Generated from the creator, not hand-copied.
+// An out-of-date rules.js degrades to a sheet without expanded item text; it
+// never produces a wrong number, because it holds no numbers.
+//
 // WHAT IS SAFE TO EDIT:
 // Only fields whose shape was confirmed against the creator source are
-// mutated: the current* resource numbers, injuries, truths, the equipped and
-// discharged flags on items, and activeExhaustion. Anything else is preserved
-// untouched, which is what makes the round trip lossless. activeExhaustion
-// became safe to edit at creator v1.12, which ships the exhaustion table in
-// the snapshot, so the keys written here are the creator's own.
+// mutated: the current* resource numbers, injuries, truths, knowledge
+// fragments, custom items, activeExhaustion, and the equipped, discharged and
+// qty fields on items. Anything else is preserved untouched, which is what
+// makes the round trip lossless.
+//
+// MOMENTUM:
+// Momentum is a group pool in Dreams & Machines — the creator's own rules text
+// says the group can save up to 6 — so this sheet reads and writes the shared
+// room pool the roller already keeps, not a private per-character counter. The
+// character's own currentMomentum field is mirrored from the pool so that a
+// code carried back to the creator still shows a sensible number.
 // =============================================================
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
 import {
-  ID, CHAR_KEY, CHANNEL, ATTRS, SKILLS,
+  ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, ATTRS, SKILLS,
   parseCode, rebuildCode, rollDice, resolveRoll, clamp, shutDownAttrs,
 } from "./dnm.js";
+import { tip, itemExtras } from "./rules.js";
 
 const params = new URLSearchParams(location.search);
 const itemId = params.get("item");
 
 let parsed = null;      // { parts, char, snap, cpIndex }
+let room = structuredClone(EMPTY_STATE);
 let saveTimer = null;
 let playerName = "Someone";
 let pickedAttr = null;
@@ -41,6 +58,42 @@ let difficulty = 1;
 
 const el = (id) => document.getElementById(id);
 const setStatus = (m) => { el("sheet-status").textContent = m || ""; };
+
+// -------------------------------------------------------------
+// Tiny DOM builder
+// -------------------------------------------------------------
+// Sections are built here rather than declared in sheet.html. v0.5 split them
+// across both and the two drifted, which threw and killed every section after
+// the first mismatch. One source of truth removes that failure mode.
+function h(tag, props = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k === "html") node.innerHTML = v;
+    else if (k === "on") for (const [ev, fn] of Object.entries(v)) node.addEventListener(ev, fn);
+    else if (k === "data") for (const [d, dv] of Object.entries(v)) node.dataset[d] = dv;
+    else if (k in node) node[k] = v;
+    else node.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    node.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return node;
+}
+
+const band = (title, hint, ...kids) =>
+  h("section", { class: "band" },
+    h("div", { class: "band-title" }, title, hint ? h("span", { class: "hint", text: hint }) : null),
+    ...kids);
+
+const prose = (title, text, cls) =>
+  h("div", { class: "prose-item" + (cls ? " " + cls : "") },
+    h("h3", { text: title }), h("p", { text: text || "" }));
+
+const emptyNote = (text) => h("p", { class: "empty", text });
 
 // -------------------------------------------------------------
 // Persistence
@@ -68,6 +121,17 @@ async function commit() {
   }
 }
 
+// Pool changes are announced, never written directly. The GM's background page
+// is the only writer of room metadata; see applyEvent in dnm.js for why.
+async function announce(ev) {
+  try {
+    await OBR.broadcast.sendMessage(CHANNEL, ev, { destination: "ALL" });
+  } catch (err) {
+    setStatus("Could not reach the room. The others may not have seen that.");
+    console.error("[dnm] broadcast failed", err);
+  }
+}
+
 // -------------------------------------------------------------
 // Import
 // -------------------------------------------------------------
@@ -85,403 +149,519 @@ async function doImport() {
   showSheet();
 }
 
-// -------------------------------------------------------------
-// Rendering
-// -------------------------------------------------------------
 function showSheet() {
   el("import-view").hidden = true;
   el("sheet-view").hidden = false;
   render();
 }
 
+// -------------------------------------------------------------
+// Render
+// -------------------------------------------------------------
 function render() {
-  const { snap, char } = parsed;
+  const { snap } = parsed;
 
   el("char-name").textContent = snap.name || "Unnamed";
-  renderIdentity();
+  renderIdentityChips();
 
   const img = el("portrait");
   if (snap.portraitUrl) { img.src = snap.portraitUrl; img.hidden = false; }
   else img.hidden = true;
 
-  renderExhaustion();
-  renderStats();
-  renderResources();
-  renderInjuries();
-  renderTruths();
-  renderTalents();
-  renderAbilities();
-  renderTemperament();
-  renderBonds();
-  renderItems();
+  const body = el("sheet-body");
+  body.innerHTML = "";
+  body.append(
+    sectionIdentity(),
+    sectionBondsTemperament(),
+    sectionExhaustion(),
+    sectionTruthsInjuries(),
+    sectionAttributes(),
+    sectionSkills(),
+    sectionResources(),
+    sectionTalentsAbilities(),
+    sectionInventory(),
+  );
+
   renderTestBar();
 }
 
-// The identity band is a row of chips rather than one line of text, so each
-// one can carry its own rules text as a tooltip. Only chips that have a
-// description get data-kind, which is what sheet.css styles as hoverable.
-function renderIdentity() {
+// A partial re-render for edits that only touch one band. Rebuilding the whole
+// body on every keystroke would blur a focused input mid-typing.
+function refresh(...builders) {
+  const body = el("sheet-body");
+  const order = [sectionIdentity, sectionBondsTemperament, sectionExhaustion,
+    sectionTruthsInjuries, sectionAttributes, sectionSkills, sectionResources,
+    sectionTalentsAbilities, sectionInventory];
+  for (const builder of builders) {
+    const i = order.indexOf(builder);
+    if (i < 0 || !body.children[i]) continue;
+    body.children[i].replaceWith(builder());
+  }
+  renderTestBar();
+}
+
+function renderIdentityChips() {
   const { snap } = parsed;
   const box = el("ident-chips");
   box.innerHTML = "";
-
   const chips = [
     { label: snap.pronouns, kind: null, desc: "" },
     { label: snap.origin, kind: "origin", desc: snap.originDesc },
     { label: snap.archetype, kind: "archetype", desc: snap.archetypeDesc },
     { label: snap.temperament, kind: "temperament", desc: snap.temperamentDesc },
-    { label: snap.techLevel != null ? `Tech Level ${snap.techLevel}` : "", kind: null, desc: "" },
   ];
-
   for (const { label, kind, desc } of chips) {
     if (!label) continue;
-    const span = document.createElement("span");
-    span.className = "chip";
-    span.textContent = label;
-    if (kind && desc) {
-      span.dataset.kind = kind;
-      span.title = desc;
-    }
-    box.append(span);
+    box.append(h("span", {
+      class: "chip",
+      text: label,
+      title: kind && desc ? desc : null,
+      data: kind && desc ? { kind } : {},
+    }));
   }
 }
 
-function renderExhaustion() {
+function sectionIdentity() {
+  const { snap } = parsed;
+  const cells = [
+    ["Archetype goal", snap.archetypeGoal],
+    ["Short-term ambition", snap.shortTermGoal],
+    ["Long-term ambition", snap.longTermGoal],
+  ].filter(([, text]) => text);
+
+  const grid = h("div", { class: "ident-grid" },
+    ...cells.map(([label, text]) =>
+      h("div", { class: "ident-cell" },
+        h("div", { class: "ident-label", text: label }),
+        h("div", { class: "ident-text", text }))),
+    snap.techLevel != null
+      ? h("div", { class: "ident-cell tech-level" },
+          h("div", { class: "ident-label", text: "Tech level" }),
+          h("div", { class: "tech-num", text: snap.techLevel }))
+      : null,
+  );
+  return band("Character", null, grid);
+}
+
+function sectionBondsTemperament() {
+  const { snap } = parsed;
+
+  const bonds = h("div", { class: "prose-list" });
+  for (const b of snap.bonds || []) {
+    bonds.append(h("div", { class: "prose-item" },
+      h("h3", {}, b.name || "Unnamed bond",
+        b.typeName ? h("span", { class: "bond-type", text: b.typeName }) : null),
+      h("p", { text: b.desc || "" })));
+  }
+  if (!bonds.children.length) bonds.append(emptyNote("No bonds recorded."));
+
+  const temp = h("div", { class: "prose-list" });
+  for (const [label, text] of [
+    ["Drive", snap.temperamentDrive],
+    ["Exhaustion trigger", snap.temperamentExhaustion],
+    ["Attitude", snap.temperamentAttitude],
+  ]) if (text) temp.append(prose(label, text));
+  if (!temp.children.length) temp.append(emptyNote(snap.temperamentDesc || "No temperament recorded."));
+
+  return h("section", { class: "band" },
+    h("div", { class: "split" },
+      h("div", { class: "band" }, h("div", { class: "band-title", text: "Bonds" }), bonds),
+      h("div", { class: "band" },
+        h("div", { class: "band-title", text: `Temperament${snap.temperament ? ": " + snap.temperament : ""}` }),
+        temp)));
+}
+
+function sectionExhaustion() {
   const { snap, char } = parsed;
-  const box = el("exhaustion");
-  box.innerHTML = "";
   const types = snap.exhaustionTypes || [];
+  const row = h("div", { class: "exh-row" });
+
   if (!types.length) {
-    box.innerHTML = '<p class="empty">Re-export from creator v1.12 to enable exhaustion tracking.</p>';
-    return;
+    return band("Exhaustion states", null,
+      emptyNote("Re-export from creator v1.12 or newer to enable exhaustion tracking."));
   }
   if (!Array.isArray(char.activeExhaustion)) char.activeExhaustion = [];
 
   for (const t of types) {
     const active = char.activeExhaustion.includes(t.key);
-    const card = document.createElement("button");
-    card.className = "exh-card" + (active ? " active" : "");
-    card.title = t.desc || "";
-    const n = document.createElement("span");
-    n.className = "exh-name";
-    n.textContent = t.name;
-    const a = document.createElement("span");
-    a.className = "exh-attr";
-    a.textContent = `Shuts down ${t.attrName || t.attr}`;
-    card.append(n, a);
-    card.addEventListener("click", () => {
-      char.activeExhaustion = active
-        ? char.activeExhaustion.filter((k) => k !== t.key)
-        : [...char.activeExhaustion, t.key];
-      renderExhaustion();
-      renderStats();
-      renderTestBar();
-      queueSave();
-    });
-    box.append(card);
+    row.append(h("button", {
+      class: "exh-card" + (active ? " active" : ""),
+      on: { click: () => {
+        char.activeExhaustion = active
+          ? char.activeExhaustion.filter((k) => k !== t.key)
+          : [...char.activeExhaustion, t.key];
+        refresh(sectionExhaustion, sectionAttributes);
+        queueSave();
+      } },
+    },
+      h("span", { class: "exh-name", text: t.name }),
+      h("span", { class: "exh-attr", text: t.attrName || t.attr }),
+      h("span", { class: "exh-desc", text: t.desc || "" })));
   }
+  return band("Exhaustion states", "click to toggle", row);
 }
 
-function renderStats() {
-  const { snap } = parsed;
-
-  const down = shutDownAttrs(snap, parsed.char);
-  const attrBox = el("attrs");
-  attrBox.innerHTML = "";
-  for (const [key, label] of Object.entries(ATTRS)) {
-    attrBox.append(statRow(key, label, snap.attrs?.[key] ?? 0, "attr", down.has(key)));
-  }
-
-  const skillBox = el("skills");
-  skillBox.innerHTML = "";
-  for (const [key, label] of Object.entries(SKILLS)) {
-    skillBox.append(statRow(key, label, snap.skills?.[key] ?? 0, "skill"));
-  }
-}
-
-function statRow(key, label, value, kind, isDown = false) {
-  const row = document.createElement("button");
-  row.className = "stat-row-btn" + (isDown ? " down" : "");
-  if (isDown) row.title = "Exhausted: tests against this attribute fail automatically";
-  row.dataset.kind = kind;
-  row.dataset.key = key;
-  if ((kind === "attr" && pickedAttr === key) || (kind === "skill" && pickedSkill === key)) {
-    row.classList.add("picked");
-  }
-  const n = document.createElement("span");
-  n.className = "stat-name";
-  n.textContent = label;
-  const v = document.createElement("span");
-  v.className = "stat-num";
-  v.textContent = value;
-  row.append(n, v);
-  row.addEventListener("click", () => {
-    if (isDown) return;
-    if (kind === "attr") pickedAttr = pickedAttr === key ? null : key;
-    else pickedSkill = pickedSkill === key ? null : key;
-    renderStats();
-    renderTestBar();
-  });
-  return row;
-}
-
-// Resource maxima come from the snapshot where the creator computes them, and
-// from the character object for the two it tracks per character (coin and
-// momentum). Momentum here is this character's personal pool as the creator
-// models it, which is separate from the shared room pool in the roller.
-function renderResources() {
-  const { snap, char } = parsed;
-  const defs = [
-    { field: "currentSpirit", label: "Spirit", max: snap.spiritMax },
-    { field: "currentSupply", label: "Supply", max: snap.supplyMax },
-    { field: "currentCoin", label: "Coin", max: char.coinMax ?? null },
-    { field: "currentMomentum", label: "Momentum", max: char.momentumMax ?? null },
-  ];
-  const box = el("resources");
-  box.innerHTML = "";
-  for (const d of defs) {
-    if (d.max == null && char[d.field] == null) continue;
-    box.append(resourceRow(d));
-  }
-}
-
-function resourceRow({ field, label, max }) {
+function sectionTruthsInjuries() {
   const { char } = parsed;
-  const wrap = document.createElement("div");
-  wrap.className = "res-row";
 
-  const name = document.createElement("span");
-  name.className = "res-name";
-  name.textContent = label;
+  if (!Array.isArray(char.truths)) char.truths = ["", ""];
+  const truths = h("div", { class: "line-list" });
+  char.truths.forEach((t, i) => {
+    const input = h("input", {
+      type: "text", value: t || "", placeholder: `Truth ${i + 1}`, maxLength: 120,
+      on: { input: (e) => { char.truths[i] = e.target.value; queueSave(); } },
+    });
+    truths.append(h("div", { class: "line-row" }, input,
+      h("button", { class: "ghost mini", text: "Remove", on: { click: () => {
+        char.truths.splice(i, 1);
+        refresh(sectionTruthsInjuries);
+        queueSave();
+      } } })));
+  });
+  truths.append(h("button", { class: "mini", text: "Create truth", on: { click: () => {
+    char.truths.push("");
+    refresh(sectionTruthsInjuries);
+    queueSave();
+  } } }));
 
-  const minus = document.createElement("button");
-  minus.className = "step";
-  minus.textContent = "\u2212";
+  if (!Array.isArray(char.injuries)) char.injuries = [];
+  const list = h("ul", { class: "tag-list" });
+  if (!char.injuries.length) list.append(h("li", { class: "empty", text: "None" }));
+  char.injuries.forEach((text, i) => {
+    list.append(h("li", { class: "tag" },
+      typeof text === "string" ? text : JSON.stringify(text),
+      h("button", {
+        class: "tag-x", text: "\u00d7", title: "Heal",
+        on: { click: () => {
+          // Mirrors the creator's Heal control: healed injuries are archived
+          // rather than deleted, so the history survives the round trip.
+          if (!Array.isArray(char.healedInjuries)) char.healedInjuries = [];
+          char.healedInjuries.push(char.injuries[i]);
+          char.injuries.splice(i, 1);
+          refresh(sectionTruthsInjuries);
+          queueSave();
+        } },
+      })));
+  });
 
-  const val = document.createElement("span");
-  val.className = "res-val";
-  const cur = char[field] ?? 0;
-  val.textContent = max != null ? `${cur} / ${max}` : `${cur}`;
-
-  const plus = document.createElement("button");
-  plus.className = "step";
-  plus.textContent = "+";
-
-  const step = (delta) => {
-    const hi = max != null ? max : 99;
-    char[field] = clamp((char[field] ?? 0) + delta, 0, hi);
-    renderResources();
-    renderTestBar();
+  const addInput = h("input", { type: "text", placeholder: "Add injury or treated injury", maxLength: 60 });
+  const addInjury = () => {
+    const v = addInput.value.trim();
+    if (!v) return;
+    char.injuries.push(v);
+    refresh(sectionTruthsInjuries);
     queueSave();
   };
-  minus.addEventListener("click", () => step(-1));
-  plus.addEventListener("click", () => step(1));
+  addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addInjury(); });
 
-  wrap.append(name, minus, val, plus);
-  return wrap;
+  const healed = (char.healedInjuries || []).length;
+
+  return h("section", { class: "band" },
+    h("div", { class: "split" },
+      h("div", { class: "band" }, h("div", { class: "band-title", text: "Truths" }), truths),
+      h("div", { class: "band" },
+        h("div", { class: "band-title", text: "Injuries" }),
+        list,
+        h("div", { class: "line-row" }, addInput,
+          h("button", { class: "mini", text: "Add", on: { click: addInjury } })),
+        healed ? h("div", { class: "healed-note", text: `Healed injuries: ${healed}` }) : null)));
 }
 
-function renderInjuries() {
-  const { char } = parsed;
-  const list = el("injuries");
-  list.innerHTML = "";
-  const injuries = Array.isArray(char.injuries) ? char.injuries : [];
-  if (injuries.length === 0) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = "None";
-    list.append(li);
-  }
-  injuries.forEach((text, i) => {
-    const li = document.createElement("li");
-    li.className = "tag";
-    li.textContent = typeof text === "string" ? text : JSON.stringify(text);
-    const heal = document.createElement("button");
-    heal.className = "tag-x";
-    heal.textContent = "\u00d7";
-    heal.title = "Heal";
-    heal.addEventListener("click", () => {
-      // Mirrors the creator's Heal control: healed injuries are archived
-      // rather than deleted, so the history survives the round trip.
-      if (!Array.isArray(char.healedInjuries)) char.healedInjuries = [];
-      char.healedInjuries.push(injuries[i]);
-      char.injuries = injuries.filter((_, j) => j !== i);
-      renderInjuries();
-      queueSave();
-    });
-    li.append(heal);
-    list.append(li);
-  });
-}
-
-function renderTruths() {
-  const { char } = parsed;
-  const box = el("truths");
-  box.innerHTML = "";
-  const truths = Array.isArray(char.truths) ? char.truths : ["", ""];
-  truths.forEach((t, i) => {
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = t || "";
-    input.placeholder = `Truth ${i + 1}`;
-    input.maxLength = 120;
-    input.addEventListener("input", () => {
-      char.truths[i] = input.value;
-      queueSave();
-    });
-    box.append(input);
-  });
-}
-
-function renderTalents() {
-  const box = el("talents");
-  box.innerHTML = "";
-  const talents = parsed.snap.talents || [];
-  if (!talents.length) { box.innerHTML = '<p class="empty">None</p>'; return; }
-  for (const t of talents) {
-    const d = document.createElement("div");
-    d.className = "prose-item";
-    const h = document.createElement("h3");
-    h.textContent = t.name;
-    const p = document.createElement("p");
-    p.textContent = t.desc || "";
-    d.append(h, p);
-    box.append(d);
-  }
-}
-
-function proseSection(boxId, entries) {
-  const box = el(boxId);
-  box.innerHTML = "";
-  if (!entries.length) { box.innerHTML = '<p class="empty">None</p>'; return; }
-  for (const [title, text] of entries) {
-    const d = document.createElement("div");
-    d.className = "prose-item";
-    const h = document.createElement("h3");
-    h.textContent = title;
-    const p = document.createElement("p");
-    p.textContent = text || "";
-    d.append(h, p);
-    box.append(d);
-  }
-}
-
-function renderAbilities() {
-  proseSection("abilities", (parsed.snap.abilities || []).map((a) => [a.name, a.desc]));
-}
-
-function renderTemperament() {
-  const { snap } = parsed;
-  const rows = [];
-  if (snap.temperament) rows.push([snap.temperament, snap.temperamentDesc]);
-  if (snap.temperamentExhaustion) rows.push(["When exhausted", snap.temperamentExhaustion]);
-  proseSection("temperament", rows);
-}
-
-function renderBonds() {
-  const { snap } = parsed;
-  const box = el("bonds");
-  box.innerHTML = "";
-  for (const b of snap.bonds || []) {
-    const d = document.createElement("div");
-    d.className = "prose-item";
-    const h = document.createElement("h3");
-    h.textContent = `${b.name}${b.typeName ? ` \u2014 ${b.typeName}` : ""}`;
-    const p = document.createElement("p");
-    p.textContent = b.desc || b.type || "";
-    d.append(h, p);
-    box.append(d);
-  }
-  for (const [label, text] of [["Short-term goal", snap.shortTermGoal], ["Long-term goal", snap.longTermGoal]]) {
-    if (!text) continue;
-    const d = document.createElement("div");
-    d.className = "prose-item";
-    const h = document.createElement("h3");
-    h.textContent = label;
-    const p = document.createElement("p");
-    p.textContent = text;
-    d.append(h, p);
-    box.append(d);
-  }
-  if (!box.children.length) box.innerHTML = '<p class="empty">None</p>';
-}
-
-function renderItems() {
+// Equipped items can carry a note about a specific attribute or skill. The
+// creator badges those; the same badge is rebuilt here from the effect lists in
+// rules.js, matched against whatever the character currently has equipped.
+function statNotes(kind, key) {
   const { snap, char } = parsed;
-  const box = el("items");
-  box.innerHTML = "";
-  const items = snap.items || [];
-  if (!items.length) { box.innerHTML = '<p class="empty">Nothing carried</p>'; return; }
-
-  for (const it of items) {
+  const field = kind === "attr" ? "attributeKeys" : "skillKeys";
+  const notes = [];
+  for (const it of snap.items || []) {
+    // Equipped state is live and lives in the character payload. The snapshot's
+    // copy is whatever was true when the code was exported, so reading it here
+    // would leave the badges frozen at export time.
     const ref = (char.items || []).find((r) => r.id === it.id);
-    const card = document.createElement("div");
-    card.className = "item-card";
-    if (ref?.equipped) card.classList.add("equipped");
-    if (ref?.discharged) card.classList.add("discharged");
-
-    const head = document.createElement("div");
-    head.className = "item-head";
-    const nm = document.createElement("strong");
-    nm.textContent = it.qty > 1 ? `${it.name} \u00d7${it.qty}` : it.name;
-    head.append(nm);
-    card.append(head);
-
-    // Only the numbers that get consulted mid-scene. Protection can be a
-    // string such as "2 (1)" for vehicles, so it is printed rather than parsed.
-    const facts = [];
-    if (it.damage != null) facts.push(`Damage ${it.damage}`);
-    if (it.injury) facts.push(`Injury: ${it.injury}`);
-    if (it.protection != null) facts.push(`Protection ${it.protection}`);
-    if (it.techLevel != null) facts.push(`TL${it.techLevel}`);
-    if (facts.length) {
-      const f = document.createElement("div");
-      f.className = "item-facts";
-      f.textContent = facts.join(" · ");
-      card.append(f);
+    if (!ref?.equipped) continue;
+    for (const effect of itemExtras(it.id).situationalEffects || []) {
+      if (Array.isArray(effect[field]) && effect[field].includes(key)) {
+        notes.push(`${it.name}: ${effect.rulesText || effect.label || ""}`);
+      }
     }
-
-    if (it.qualities?.length) {
-      const q = document.createElement("div");
-      q.className = "item-qualities";
-      q.textContent = it.qualities.join(", ");
-      card.append(q);
-    }
-
-    if (it.description) {
-      const p = document.createElement("p");
-      p.className = "item-desc";
-      p.textContent = it.description;
-      card.append(p);
-    }
-
-    if (ref) {
-      const toggles = document.createElement("div");
-      toggles.className = "item-toggles";
-      toggles.append(
-        toggle("Equipped", !!ref.equipped, (v) => { ref.equipped = v; renderItems(); queueSave(); }),
-        toggle("Discharged", !!ref.discharged, (v) => { ref.discharged = v; renderItems(); queueSave(); }),
-      );
-      card.append(toggles);
-    }
-
-    box.append(card);
   }
-
-  for (const ci of parsed.snap.customItems || []) {
-    const card = document.createElement("div");
-    card.className = "item-card custom";
-    card.textContent = typeof ci === "string" ? ci : (ci.name || JSON.stringify(ci));
-    box.append(card);
-  }
+  return notes;
 }
 
-function toggle(label, on, onChange) {
-  const b = document.createElement("button");
-  b.className = "toggle" + (on ? " on" : "");
-  b.textContent = label;
-  b.addEventListener("click", () => onChange(!on));
-  return b;
+function statCard(kind, key, label, value, isDown) {
+  const notes = statNotes(kind, key);
+  const picked = (kind === "attr" && pickedAttr === key) || (kind === "skill" && pickedSkill === key);
+  return h("button", {
+    class: "stat-row-btn" + (picked ? " picked" : "") + (isDown ? " down" : ""),
+    title: isDown ? "Exhausted: tests against this attribute fail automatically" : null,
+    on: { click: () => {
+      if (isDown) return;
+      if (kind === "attr") pickedAttr = pickedAttr === key ? null : key;
+      else pickedSkill = pickedSkill === key ? null : key;
+      refresh(sectionAttributes, sectionSkills);
+    } },
+  },
+    h("span", { class: "stat-name", text: label }),
+    h("span", { class: "stat-num", text: value }),
+    notes.length
+      ? h("span", { class: "stat-note", title: notes.join("\n\n"), text: `${notes.length} item note${notes.length === 1 ? "" : "s"}` })
+      : null);
+}
+
+function sectionAttributes() {
+  const { snap } = parsed;
+  const down = shutDownAttrs(snap, parsed.char);
+  const grid = h("div", { class: "stat-grid attrs" });
+  for (const [key, label] of Object.entries(ATTRS)) {
+    grid.append(statCard("attr", key, label, snap.attrs?.[key] ?? 0, down.has(key)));
+  }
+  return band("Attributes", null, grid);
+}
+
+function sectionSkills() {
+  const { snap } = parsed;
+  const grid = h("div", { class: "stat-grid skills" });
+  for (const [key, label] of Object.entries(SKILLS)) {
+    grid.append(statCard("skill", key, label, snap.skills?.[key] ?? 0, false));
+  }
+  return band("Skills", null, grid);
+}
+
+function resourceCard({ label, value, max, onStep, breakdown, shared, note }) {
+  const controls = h("div", { class: "res-controls" },
+    h("button", { class: "step", text: "\u2212", on: { click: () => onStep(-1) } }),
+    h("span", { class: "res-val", text: value }),
+    h("button", { class: "step", text: "+", on: { click: () => onStep(1) } }));
+  return h("div", { class: "res-card" + (shared ? " shared" : "") },
+    h("div", { class: "res-name", text: label, title: note || null }),
+    controls,
+    max != null ? h("div", { class: "res-max", text: `max ${max}` }) : null,
+    shared ? h("div", { class: "res-shared-note", text: "group pool" }) : null,
+    breakdown ? h("div", { class: "res-breakdown", text: breakdown }) : null);
+}
+
+function sectionResources() {
+  const { snap, char } = parsed;
+  const grid = h("div", { class: "res-grid" });
+
+  const breakdownFor = (key) => {
+    const b = snap.resourceBreakdown?.[key];
+    return b ? `equipped +${b.total}: ${b.items.join(", ")}` : null;
+  };
+
+  const stepper = (field, max) => (delta) => {
+    char[field] = clamp((char[field] ?? 0) + delta, 0, max == null ? 99 : max);
+    refresh(sectionResources);
+    queueSave();
+  };
+
+  const defs = [
+    { field: "currentSpirit", label: "Spirit", max: snap.spiritMax, key: "spirit" },
+    { field: "currentSupply", label: "Supply points", max: snap.supplyMax, key: "supply" },
+    { field: "currentCoin", label: "Coin", max: snap.coinMax ?? char.coinMax ?? 20, key: "coin" },
+    { field: "currentGrowth", label: "Growth", max: snap.growthMax ?? 10, key: "growth" },
+  ];
+  for (const d of defs) {
+    grid.append(resourceCard({
+      label: d.label,
+      value: char[d.field] ?? 0,
+      max: d.max,
+      onStep: stepper(d.field, d.max),
+      breakdown: breakdownFor(d.key),
+    }));
+  }
+
+  // Momentum is the group's, not this character's. Steps are broadcast the way
+  // the roller broadcasts them, so every open panel and the log agree.
+  const momentumMax = snap.momentumMax ?? 6;
+  grid.append(resourceCard({
+    label: "Momentum",
+    value: room.momentum ?? 0,
+    max: momentumMax,
+    shared: true,
+    note: "Momentum is a shared group pool. The group can save up to 6 for later use.",
+    onStep: (delta) => announce({ type: "pool", pool: "momentum", delta }),
+  }));
+
+  // Knowledge fragments are a list, not a count: a Weaver needs to know which
+  // ones they hold.
+  if (!Array.isArray(char.knowledgeFragments)) char.knowledgeFragments = [];
+  const frags = h("div", { class: "line-list" });
+  char.knowledgeFragments.forEach((f, i) => {
+    frags.append(h("div", { class: "line-row" },
+      h("input", {
+        type: "text", value: f || "", maxLength: 120,
+        on: { input: (e) => { char.knowledgeFragments[i] = e.target.value; queueSave(); } },
+      }),
+      h("button", { class: "ghost mini", text: "Remove", on: { click: () => {
+        char.knowledgeFragments.splice(i, 1);
+        refresh(sectionResources);
+        queueSave();
+      } } })));
+  });
+  if (!char.knowledgeFragments.length) frags.append(emptyNote("None recorded."));
+  frags.append(h("button", { class: "mini", text: "Add fragment", on: { click: () => {
+    char.knowledgeFragments.push("");
+    refresh(sectionResources);
+    queueSave();
+  } } }));
+
+  return band("Resources", null, grid,
+    h("div", { class: "band-title", text: "Knowledge fragments" }), frags);
+}
+
+function sectionTalentsAbilities() {
+  const { snap } = parsed;
+  const talents = h("div", { class: "prose-list" });
+  for (const t of snap.talents || []) talents.append(prose(t.name, t.desc, "boxed"));
+  if (!talents.children.length) talents.append(emptyNote("None."));
+
+  const abilities = h("div", { class: "prose-list" });
+  for (const a of snap.abilities || []) abilities.append(prose(a.name, a.desc, "boxed origin"));
+  if (!abilities.children.length) abilities.append(emptyNote("None."));
+
+  return h("section", { class: "band" },
+    h("div", { class: "split" },
+      h("div", { class: "band" }, h("div", { class: "band-title", text: "Origin abilities" }), abilities),
+      h("div", { class: "band" }, h("div", { class: "band-title", text: "Talents" }), talents)));
+}
+
+function itemCard(it) {
+  const { char } = parsed;
+  const ref = (char.items || []).find((r) => r.id === it.id);
+  const extras = itemExtras(it.id);
+  const powered = it.powered;
+
+  const card = h("details", {
+    class: "item-card"
+      + (ref?.equipped ? " equipped" : "")
+      + (ref?.discharged ? " discharged" : ""),
+  });
+
+  const tags = h("div", { class: "item-tags" });
+  for (const t of extras.tags || []) {
+    const info = t.k ? tip(t.k) : (t.name || t.desc ? { name: t.name, desc: t.desc } : null);
+    tags.append(h("span", {
+      class: "item-tag",
+      text: t.label,
+      title: info ? `${info.name}\n\n${info.desc}` : null,
+    }));
+  }
+
+  const controls = h("div", { class: "item-controls" });
+  if (ref) {
+    if (powered?.trackDischarge) {
+      controls.append(h("button", {
+        class: "toggle charge" + (ref.discharged ? " discharged" : " on"),
+        text: ref.discharged ? "Discharged" : "Charged",
+        on: { click: (e) => {
+          e.preventDefault(); e.stopPropagation();
+          ref.discharged = !ref.discharged;
+          refresh(sectionInventory);
+          queueSave();
+        } },
+      }));
+    }
+    controls.append(h("button", {
+      class: "toggle" + (ref.equipped ? " on" : ""),
+      text: ref.equipped ? "Equipped" : "Equip",
+      on: { click: (e) => {
+        e.preventDefault(); e.stopPropagation();
+        ref.equipped = !ref.equipped;
+        // Equipping changes which item notes apply, so the stat bands move too.
+        refresh(sectionInventory, sectionAttributes, sectionSkills);
+        queueSave();
+      } },
+    }));
+    controls.append(h("div", { class: "qty" },
+      h("button", { class: "step", text: "\u2212", on: { click: (e) => {
+        e.preventDefault(); e.stopPropagation();
+        ref.qty = Math.max(1, (ref.qty || 1) - 1);
+        refresh(sectionInventory);
+        queueSave();
+      } } }),
+      h("span", { class: "qty-val", text: ref.qty || 1 }),
+      h("button", { class: "step", text: "+", on: { click: (e) => {
+        e.preventDefault(); e.stopPropagation();
+        ref.qty = (ref.qty || 1) + 1;
+        refresh(sectionInventory);
+        queueSave();
+      } } })));
+  }
+
+  card.append(h("summary", {},
+    h("div", { class: "item-main" },
+      h("div", { class: "item-name", text: it.name }),
+      tags),
+    controls));
+
+  const body = h("div", { class: "item-body" },
+    h("div", { class: "item-desc", text: extras.full || it.description || "No description available." }));
+
+  if (ref?.discharged) {
+    body.append(h("div", { class: "item-note status" },
+      h("strong", { text: "Status: " }),
+      powered?.recharge === "special"
+        ? "Discharged. Special recharge rules apply; clear this state manually when recharged."
+        : "Discharged."));
+  }
+  const noteRows = [
+    ...(extras.equipEffects || []).map((e) => ["Equipped effect", e]),
+    ...(extras.situationalEffects || []).map((e) => ["Situational", e]),
+    ...(extras.itemActions || []).map((e) => ["Manual action", e]),
+  ];
+  for (const [label, e] of noteRows) {
+    body.append(h("div", { class: "item-note" },
+      h("strong", { text: label + ": " }), e.rulesText || e.label || ""));
+  }
+  if (extras.rulesNote) body.append(h("div", { class: "item-note" }, h("strong", { text: "Rules note: " }), extras.rulesNote));
+  if (extras.availabilityNote) body.append(h("div", { class: "item-note" }, h("strong", { text: "Availability: " }), extras.availabilityNote));
+
+  card.append(body);
+  return card;
+}
+
+function sectionInventory() {
+  const { snap, char } = parsed;
+
+  const owned = h("div", { class: "item-list" });
+  for (const it of snap.items || []) owned.append(itemCard(it));
+  if (!owned.children.length) owned.append(emptyNote("Nothing carried."));
+
+  if (!Array.isArray(char.customItems)) char.customItems = [];
+  const custom = h("div", { class: "line-list" });
+  char.customItems.forEach((ci, i) => {
+    custom.append(h("div", { class: "line-row" },
+      h("input", {
+        type: "text", value: typeof ci === "string" ? ci : (ci?.name || ""), maxLength: 120,
+        on: { input: (e) => { char.customItems[i] = e.target.value; queueSave(); } },
+      }),
+      h("button", { class: "ghost mini", text: "Remove", on: { click: () => {
+        char.customItems.splice(i, 1);
+        refresh(sectionInventory);
+        queueSave();
+      } } })));
+  });
+  if (!char.customItems.length) custom.append(emptyNote("None."));
+  custom.append(h("button", { class: "mini", text: "Add custom item", on: { click: () => {
+    char.customItems.push("");
+    refresh(sectionInventory);
+    queueSave();
+  } } }));
+
+  const parts = [];
+  if (snap.startingEquipment) {
+    parts.push(h("div", { class: "band-title", text: "Starting equipment" }));
+    parts.push(h("div", { class: "item-desc", text: snap.startingEquipment }));
+    if (snap.originSpecialNote) {
+      parts.push(h("div", { class: "item-note" }, h("strong", { text: "Note: " }), snap.originSpecialNote));
+    }
+  }
+  parts.push(h("div", { class: "band-title", text: "Owned items" }), owned);
+  parts.push(h("div", { class: "band-title", text: "Custom items" }), custom);
+
+  return band("Inventory & equipment", null, ...parts);
 }
 
 // -------------------------------------------------------------
@@ -527,7 +707,7 @@ async function doRoll() {
 
   if (cost > 0) {
     char.currentSpirit = Math.max(0, (char.currentSpirit ?? 0) - cost);
-    renderResources();
+    refresh(sectionResources);
     queueSave();
   }
 
@@ -595,16 +775,6 @@ function wire() {
     OBR.modal.close(`${ID}/sheet-modal`);
   });
 
-  el("add-injury").addEventListener("click", () => {
-    const v = el("injury-input").value.trim();
-    if (!v) return;
-    if (!Array.isArray(parsed.char.injuries)) parsed.char.injuries = [];
-    parsed.char.injuries.push(v);
-    el("injury-input").value = "";
-    renderInjuries();
-    queueSave();
-  });
-
   el("dice-seg").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-dice]");
     if (!b) return;
@@ -626,8 +796,33 @@ function wire() {
 // -------------------------------------------------------------
 // Start
 // -------------------------------------------------------------
+// Mirror the group pool into the character so a code carried back to the creator
+// shows the table's real Momentum rather than a stale private count. Called both
+// on pool changes and once after the code is parsed, because the room is read
+// before the token is, and the first read would otherwise find no character.
+function mirrorMomentum() {
+  if (!parsed) return;
+  if (parsed.char.currentMomentum === room.momentum) return;
+  parsed.char.currentMomentum = room.momentum;
+  queueSave();
+}
+
+function adoptRoom(meta) {
+  const found = meta?.[ROOM_KEY];
+  room = found ? { ...structuredClone(EMPTY_STATE), ...found } : structuredClone(EMPTY_STATE);
+  mirrorMomentum();
+  if (parsed && !el("sheet-view").hidden) refresh(sectionResources);
+}
+
 async function start() {
   playerName = (await OBR.player.getName()) || "Someone";
+
+  try {
+    adoptRoom(await OBR.room.getMetadata());
+  } catch (err) {
+    console.error("[dnm] could not read room state", err);
+  }
+  OBR.room.onMetadataChange(adoptRoom);
 
   if (!itemId) { showImport("No token was selected."); return; }
 
@@ -640,6 +835,7 @@ async function start() {
   const result = parseCode(stored.code);
   if (result.error) { showImport(result.error); return; }
   parsed = result;
+  mirrorMomentum();
   showSheet();
 }
 
