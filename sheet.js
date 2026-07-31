@@ -15,11 +15,11 @@
 //
 // WHAT IS SAFE TO EDIT:
 // Only fields whose shape was confirmed against the creator source are
-// mutated: the current* resource numbers, injuries, truths, and the equipped
-// and discharged flags on items. Anything else is preserved untouched, which
-// is what makes the round trip lossless. activeExhaustion is deliberately
-// left alone: it holds keys into a rules table the snapshot does not carry
-// yet, so editing it here could write a value the creator cannot read back.
+// mutated: the current* resource numbers, injuries, truths, the equipped and
+// discharged flags on items, and activeExhaustion. Anything else is preserved
+// untouched, which is what makes the round trip lossless. activeExhaustion
+// became safe to edit at creator v1.12, which ships the exhaustion table in
+// the snapshot, so the keys written here are the creator's own.
 // =============================================================
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
@@ -98,9 +98,7 @@ function render() {
   const { snap, char } = parsed;
 
   el("char-name").textContent = snap.name || "Unnamed";
-  const bits = [snap.pronouns, snap.origin, snap.archetype, snap.temperament].filter(Boolean);
-  if (snap.techLevel != null) bits.push(`Tech Level ${snap.techLevel}`);
-  el("char-sub").textContent = bits.join(" · ");
+  renderIdentity();
 
   const img = el("portrait");
   if (snap.portraitUrl) { img.src = snap.portraitUrl; img.hidden = false; }
@@ -117,6 +115,35 @@ function render() {
   renderBonds();
   renderItems();
   renderTestBar();
+}
+
+// The identity band is a row of chips rather than one line of text, so each
+// one can carry its own rules text as a tooltip. Only chips that have a
+// description get data-kind, which is what sheet.css styles as hoverable.
+function renderIdentity() {
+  const { snap } = parsed;
+  const box = el("ident-chips");
+  box.innerHTML = "";
+
+  const chips = [
+    { label: snap.pronouns, kind: null, desc: "" },
+    { label: snap.origin, kind: "origin", desc: snap.originDesc },
+    { label: snap.archetype, kind: "archetype", desc: snap.archetypeDesc },
+    { label: snap.temperament, kind: "temperament", desc: snap.temperamentDesc },
+    { label: snap.techLevel != null ? `Tech Level ${snap.techLevel}` : "", kind: null, desc: "" },
+  ];
+
+  for (const { label, kind, desc } of chips) {
+    if (!label) continue;
+    const span = document.createElement("span");
+    span.className = "chip";
+    span.textContent = label;
+    if (kind && desc) {
+      span.dataset.kind = kind;
+      span.title = desc;
+    }
+    box.append(span);
+  }
 }
 
 function renderExhaustion() {
