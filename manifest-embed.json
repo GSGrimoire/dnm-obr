@@ -1,0 +1,22 @@
+{
+  "name": "Dreams & Machines (beta)",
+  "version": "0.6.0-beta",
+  "manifest_version": 1,
+  "author": "GS Grimoire",
+  "description": "Beta: character sheet opens the character creator itself",
+  "icon": "https://gsgrimoire.github.io/dnm-obr/icon.svg",
+  "background_url": "https://gsgrimoire.github.io/dnm-obr/background-beta.html",
+  "permissions": [
+    {
+      "name": "clipboard-write",
+      "reason": "Copying a character code back to the character creator"
+    }
+  ],
+  "action": {
+    "title": "D&M Rolls",
+    "icon": "https://gsgrimoire.github.io/dnm-obr/icon.svg",
+    "popover": "https://gsgrimoire.github.io/dnm-obr/index.html",
+    "height": 640,
+    "width": 400
+  }
+}
