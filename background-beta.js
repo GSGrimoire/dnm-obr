@@ -16,9 +16,13 @@ const BASE = new URL(".", import.meta.url).href;
 // are suffixed so this can be installed alongside the stable extension in the
 // same room without the two fighting over the same context menu entry.
 //
+// From creator v1.14 the creator is a single file that renders itself differently
+// depending on whether it is framed, so this points at the normal published URL
+// rather than a separate beta copy.
+//
 // The roll log key is deliberately NOT suffixed: both versions write to the same
 // shared log, so a table running a mix of the two still sees one feed.
-const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/beta/dnm-character-creator.html";
+const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/dnm-character-creator.html";
 const BETA = "-beta";
 
 function setupContextMenu() {
