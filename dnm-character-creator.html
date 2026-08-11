@@ -3,7 +3,7 @@
 <!--
   ============================================================
   Dreams & Machines — Character Creator
-  Version: 1.13
+  Version: 1.15
   File:    dnm-character-creator.html (stable filename; do not version the filename)
   Docs:    CHANGELOG.html (player-facing) / UPGRADE_NOTES.md (cumulative technical log)
 
@@ -2326,6 +2326,108 @@ body::after {
 
 
 
+
+/* v1.14 -------------------------------------------------------- */
+.share-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.share-size { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-dim); letter-spacing: .1em; }
+.code-scroll { max-height: 92px; overflow-y: auto; overflow-wrap: anywhere; font-size: 0.6rem; line-height: 1.5; }
+
+.stat-box.pickable, .skill-box.pickable { cursor: pointer; transition: border-color .12s, background .12s; }
+.stat-box.pickable:hover, .skill-box.pickable:hover { border-color: var(--border-bright); }
+.stat-box.pickable.exhausted { cursor: not-allowed; }
+.stat-box.picked, .skill-box.picked {
+  border-color: var(--teal);
+  background: var(--teal-faint, rgba(0,180,180,.08));
+  box-shadow: inset 0 0 0 1px var(--teal-dim);
+}
+.stat-box.picked .stat-box-val, .skill-box.picked .skill-box-val { color: var(--teal); }
+
+.dice-momentum {
+  font-family: var(--font-mono); font-size: 0.66rem; color: var(--warning);
+  margin-top: 6px; letter-spacing: .04em;
+}
+
+/* v1.15 — Threat counter, embedded only */
+.threat-counter .resource-label { color: var(--accent); }
+.threat-counter .resource-value { color: var(--accent); }
+.threat-counter { border-color: rgba(255,107,53,.35); }
+
+/* ============================================================
+   OWLBEAR EMBEDDED MODE (beta)
+   Applied by the module block at the end of the file, only when the page
+   detects it is running inside Owlbear Rodeo. Standalone in a browser tab,
+   none of this matches and the page looks exactly as it always has.
+   ============================================================ */
+body.obr-embedded .site-header,
+body.obr-embedded .progress-bar,
+body.obr-embedded .hex-bg,
+body.obr-embedded .dm-room-block { display: none !important; }
+body.obr-embedded #app { padding-top: 0; }
+body.obr-embedded .obr-only { display: block; }
+.obr-only { display: none; }
+
+.obr-bar {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; margin-bottom: 10px;
+  background: var(--panel, #111a1a);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: .1em;
+}
+.obr-bar .obr-name { color: var(--teal); text-transform: uppercase; }
+.obr-bar .obr-save { margin-left: auto; color: var(--text-dim); }
+.obr-bar .obr-save.dirty { color: var(--warning); }
+.obr-bar .obr-save.failed { color: var(--accent); }
+
+/* v1.14 -------------------------------------------------------- */
+.share-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.share-size { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-dim); letter-spacing: .1em; }
+.code-scroll {
+  max-height: 92px; overflow-y: auto; overflow-wrap: anywhere;
+  font-size: 0.6rem; line-height: 1.5;
+}
+
+/* Clickable Attributes and Skills */
+.stat-box.pickable, .skill-box.pickable { cursor: pointer; transition: border-color .12s, background .12s; }
+.stat-box.pickable:hover, .skill-box.pickable:hover { border-color: var(--border-bright); }
+.stat-box.pickable.exhausted { cursor: not-allowed; }
+.stat-box.picked, .skill-box.picked {
+  border-color: var(--teal);
+  background: var(--teal-faint, rgba(0,180,180,.08));
+  box-shadow: inset 0 0 0 1px var(--teal-dim);
+}
+.stat-box.picked .stat-box-val, .skill-box.picked .skill-box-val { color: var(--teal); }
+
+/* Embedded header actions (beta) */
+.obr-bar .obr-on { color: var(--text-dim); }
+.obr-bar .obr-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.obr-bar .obr-save { margin-left: 12px; order: -1; }
+.obr-btn {
+  font-family: var(--font-display); font-size: 0.62rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
+  padding: 5px 11px; border-radius: 3px;
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+}
+.obr-btn:hover { border-color: var(--border-bright); color: var(--text-bright); }
+.obr-btn.danger:hover { border-color: var(--accent); color: var(--accent); }
+.obr-btn.primary { background: var(--teal-dim); border-color: var(--teal); color: var(--text-bright); }
+.obr-btn.primary:hover { background: var(--teal); color: var(--bg); }
+
+/* Embedded header actions (beta) */
+.obr-bar .obr-on { color: var(--text-dim); }
+.obr-bar .obr-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.obr-bar .obr-save { margin-left: 12px; order: -1; }
+.obr-btn {
+  font-family: var(--font-display); font-size: 0.62rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
+  padding: 5px 11px; border-radius: 3px;
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+}
+.obr-btn:hover { border-color: var(--border-bright); color: var(--text-bright); }
+.obr-btn.danger:hover { border-color: var(--accent); color: var(--accent); }
+.obr-btn.primary { background: var(--teal-dim); border-color: var(--teal); color: var(--text-bright); }
+.obr-btn.primary:hover { background: var(--teal); color: var(--bg); }
+
 </style>
 </head>
 <body>
@@ -2381,7 +2483,7 @@ body::after {
 // Update this constant on every release; the header link and the
 // character sheet stamp both read from it.
 // ============================================================
-const APP_VERSION = '1.13';
+const APP_VERSION = '1.15';
 
 // ============================================================
 // GAME DATA - Dreams & Machines Character Creator
@@ -4270,7 +4372,13 @@ function limitedUseResetText(reset) {
   }[reset] || reset;
 }
 
+// Threat from a limited-use feature is held here and flushed only after the feature
+// is successfully marked used, so a feature that bails out partway does not push
+// Threat for something that never happened.
+let pendingThreat = null;
+
 function useLimitedFeature(key, option = '') {
+  pendingThreat = null;
   const feature = LIMITED_USE_FEATURES[key];
   if (!feature || !characterHasLimitedFeature(key) || isLimitedFeatureUsed(key)) return;
 
@@ -4294,7 +4402,8 @@ function useLimitedFeature(key, option = '') {
       state.character.currentMomentum = getEffectiveResource('momentum') - 2;
       detail = ' Spent 2 Momentum.';
     } else if (option === 'threat') {
-      detail = ' Add 2 Threat at the table.';
+      pendingThreat = { amount: 2, reason: feature.name };
+      detail = '';
     } else {
       return;
     }
@@ -4304,6 +4413,7 @@ function useLimitedFeature(key, option = '') {
   saveCharacterLocal(true);
   renderAll();
   showToast(`${feature.name} used.${detail} Refreshes with ${limitedUseResetText(feature.reset)}.`, 'success');
+  if (pendingThreat) { addThreat(pendingThreat.amount, pendingThreat.reason); pendingThreat = null; }
 }
 
 function clearLimitedUseBoundary(boundary) {
@@ -5231,7 +5341,15 @@ function readLocalLibrary() {
 }
 
 function writeLocalLibrary(list) {
-  localStorage.setItem(LOCAL_LIBRARY_KEY, JSON.stringify(list));
+  // The read has always been guarded; the write had not been. Browsers partition or
+  // refuse storage for embedded contexts, and this is called from toggleExhaustion()
+  // and friends, so an exception here would take the whole handler down with it.
+  // Failing to save a local copy is not worth losing an edit over.
+  try {
+    localStorage.setItem(LOCAL_LIBRARY_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.warn('[dnm] local library unavailable in this context', e);
+  }
 }
 
 function summarizeCharacterForLibrary(c) {
@@ -6277,6 +6395,23 @@ function renderSheetTruthsInjuriesRow() {
   </div>`;
 }
 
+// v1.14: selecting a stat to test by clicking it on the sheet. An exhausted
+// Attribute is not selectable, because a test against it fails automatically and
+// the dice panel already refuses the roll.
+function pickRollStat(kind, key) {
+  if (kind === 'attr') {
+    if (isAttrExhausted(key)) return;
+    diceUI.attr = key;
+  } else {
+    diceUI.skill = key;
+  }
+  renderAll();
+  const panel = document.getElementById('dicePanelAnchor');
+  if (panel && typeof panel.scrollIntoView === 'function') {
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
 function renderSheetAttributesSection(stats) {
   return `<div class="sheet-section">
     <div class="sheet-section-title">Attributes</div>
@@ -6285,7 +6420,14 @@ function renderSheetAttributesSection(stats) {
         const info = DM_DATA.attributeInfo[a];
         const exhausted = isAttrExhausted(a);
         const itemNotes = getEquippedSituationalEffectsForAttribute(a);
-        return `<div class="stat-box dm-tip ${exhausted ? 'exhausted' : ''}" tabindex="0">
+        // v1.14: picking the roll from the sheet itself. Clicking an Attribute or a
+        // Skill selects it in the dice panel, so a test is two clicks from the numbers
+        // you are reading rather than a hunt through two dropdowns.
+        const picked = diceUI.attr === a;
+        return `<div class="stat-box dm-tip pickable ${picked ? 'picked' : ''} ${exhausted ? 'exhausted' : ''}" tabindex="0" role="button"
+          title="${exhausted ? 'Shut down by Exhaustion' : 'Click to test with ' + escHtml(info.name)}"
+          onclick="pickRollStat('attr','${a}')"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pickRollStat('attr','${a}');}">
           <div class="stat-box-label">${info.name}${exhausted ? ' ⚠' : ''}</div>
           <div class="stat-box-val">${stats.attrs[a]||6}</div>
           ${itemNotes.length ? `<div class="sheet-note-pill">${itemNotes.length} item note${itemNotes.length===1?'':'s'}</div>` : ''}
@@ -6303,7 +6445,11 @@ function renderSheetSkillsSection(stats) {
       ${['fight','move','operate','sneak','study','survive','talk'].map(s => {
         const info = DM_DATA.skillInfo[s];
         const itemNotes = getEquippedSituationalEffectsForSkill(s);
-        return `<div class="skill-box dm-tip" tabindex="0">
+        const picked = diceUI.skill === s;
+        return `<div class="skill-box dm-tip pickable ${picked ? 'picked' : ''}" tabindex="0" role="button"
+          title="Click to test with ${escHtml(info.name)}"
+          onclick="pickRollStat('skill','${s}')"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pickRollStat('skill','${s}');}">
           <div class="skill-box-label">${info.name}</div>
           <div class="skill-box-val">${stats.skills[s]||1}</div>
           ${itemNotes.length ? `<div class="sheet-note-pill">${itemNotes.length} item note${itemNotes.length===1?'':'s'}</div>` : ''}
@@ -6316,6 +6462,24 @@ function renderSheetSkillsSection(stats) {
 
 // v1.09: Skills now precede Resources. Resources are the pools you spend during play,
 // so they sit closest to the Actions section that spends them.
+// Rendered always, hidden by CSS unless the sheet is embedded. Threat belongs to the
+// GM, so standalone there is nothing for it to talk to; the value shown is the room's
+// and is set by the module block at the end of the file.
+let obrThreat = null;
+
+function renderThreatCounter() {
+  const value = obrThreat == null ? 0 : obrThreat;
+  return `<div class="resource-counter obr-only threat-counter">
+    <div class="resource-label dm-tip" tabindex="0">Threat<span class="dm-tip-body"><span class="dm-tip-title">Threat</span><span class="dm-tip-desc">The Game Master's pool, shared by the whole table. Abilities and items that tell you to add Threat push it here. Anyone can add; only the GM should spend.</span></span></div>
+    <div class="resource-controls">
+      <button class="resource-btn" onclick="addThreat(-1, 'manual')">&minus;</button>
+      <div class="resource-value">${value}</div>
+      <button class="resource-btn" onclick="addThreat(1, 'manual')">+</button>
+    </div>
+    <div class="resource-max">group pool</div>
+  </div>`;
+}
+
 function renderSheetResourcesSection(c) {
   const maxes = getResourceMaxes();
   const stats = computeStats();
@@ -6332,6 +6496,7 @@ function renderSheetResourcesSection(c) {
       ${renderResourceCounter('coin', 'Coin', c.currentCoin, maxes.coin)}
       ${renderResourceCounter('growth', 'Growth', getGrowthRemaining(), maxes.growth)}
       ${renderResourceCounter('momentum', 'Momentum', c.currentMomentum, maxes.momentum)}
+      ${renderThreatCounter()}
       ${renderKnowledgeFragmentsCounter()}
     </div>
   </div>`;
@@ -6413,6 +6578,23 @@ function activateSceneEffect(key) {
   if (!state.character.activeSceneEffects.includes(key)) state.character.activeSceneEffects.push(key);
 }
 
+// v1.15: every Threat change in the app goes through here.
+//
+// Threat is the GM's pool and this file has never modelled it, so until now the app
+// printed the number in a toast and left you to say it out loud. That is fine solo
+// and lossy at a table: Adrenaline Rush is taken mid-fight and the +3 gets forgotten.
+//
+// Standalone this still only reports, because there is no pool to write to. When the
+// sheet is embedded in Owlbear, the module block at the end of the file replaces this
+// to push the change to the room's shared Threat pool as well. One funnel means a new
+// Threat source only has to call addThreat() to be wired in both contexts, rather than
+// being wired once and forgotten in the other.
+function addThreat(amount, reason) {
+  const n = Math.round(Number(amount) || 0);
+  if (!n) return;
+  showToast(`Add ${n} Threat${reason ? ' \u2014 ' + reason : ''}.`, 'warning');
+}
+
 function useAdrenalineRush(points) {
   if (isOncePerSceneUsed('adrenalineRush')) return;
   const amount = clampNumber(points, 1, 3);
@@ -6436,7 +6618,8 @@ function useAdrenalineRush(points) {
   const threat = { 1: 1, 2: 3, 3: 6 }[amount];
   const bonusText = bonuses.length ? ` Bonus sources before the Spirit maximum: ${bonuses.map(b => `+${b.amount} from ${b.name}`).join(' and ')}.` : '';
   const rivalryText = (state.character.bonds || []).some(b => b.type === 'rivalry') ? ' Your rivalry-bonded ally also gains 1 Spirit.' : '';
-  showToast(`Adrenaline Rush restored ${gained} Spirit. Add ${threat} Threat.${bonusText}${rivalryText}`, 'success');
+  showToast(`Adrenaline Rush restored ${gained} Spirit.${bonusText}${rivalryText}`, 'success');
+  addThreat(threat, 'Adrenaline Rush');
 }
 
 function useSecondWind(points, target) {
@@ -6755,8 +6938,9 @@ function renderSummaryStep() {
   //   3. Exhaustion          — four cards, mirroring the four Attributes below
   //   4. Truths / Injuries   — the mutable facts about you
   //   5. Attributes, Skills, Resources — the numbers you roll against
-  //   6. Actions, Talents & Abilities  — what you can do with them
-  //   7. Inventory, Dice, Growth, Share Code
+  //   6. Dice Roller                   — v1.14, sits under the numbers it uses
+  //   7. Actions, Talents & Abilities  — what you can do with them
+  //   8. Inventory, Growth, Share Code
   //
   // The Goals block used to sit near the bottom, below the two-column region, which
   // buried the one piece of text a player rereads every session. Promoting it into
@@ -6770,13 +6954,18 @@ function renderSummaryStep() {
   html += renderSheetAttributesSection(stats);
   html += renderSheetSkillsSection(stats);
   html += renderSheetResourcesSection(c);
+
+  // ---- Dice Roller ----
+  // v1.14: promoted from near the bottom to sit directly under the numbers it rolls
+  // against. Attributes and Skills are clickable now and select into this panel, so a
+  // long scroll between picking a stat and rolling it defeated the point. Actions
+  // follow, because what you can do comes after how you test.
+  html += renderDicePanel();
+
   html += renderActionsTalentsAbilitiesSection(c, archetypeData, abilities);
 
   // ---- Inventory: owned catalogue items (#3) ----
   html += renderInventorySection();
-
-  // ---- Dice Roller + Shared Room (#5/#6) ----
-  html += renderDicePanel();
 
   // ---- Growth summary: second to last ----
   html += renderGrowthSummarySection();
@@ -6798,13 +6987,20 @@ function renderFinalizedCharacterView() {
   return renderSummaryStep();
 }
 
+// v1.14: the actions come before the code. Almost nobody reads the code — they copy
+// it or save it — so making them scroll past 13 kB of base64 to reach the buttons had
+// the priority backwards. The code is still here for anyone who wants to inspect it,
+// now in a fixed-height scroller rather than an unbounded wall of text.
 function renderShareCodeSection(code) {
   return `<details class="code-collapse" id="shareCodeBlock">
     <summary>Character Share Code</summary>
-    <div class="code-string" id="charCode">${code}</div>
-    <button class="btn btn-secondary no-print" style="margin-top:12px;" onclick="copyCode()">Copy Code</button>
-    <button class="btn btn-secondary no-print" style="margin-top:12px;margin-left:8px;" onclick="saveCharacterLocal(false)">Save Local</button>
+    <div class="share-actions no-print">
+      <button class="btn btn-secondary" onclick="copyCode()">Copy Code</button>
+      <button class="btn btn-secondary" onclick="saveCharacterLocal(false)">Save Local</button>
+      <span class="share-size">${code.length.toLocaleString()} characters</span>
+    </div>
     <div class="validation-msg no-print" id="copyMsg" style="color:var(--teal);"></div>
+    <div class="code-string code-scroll" id="charCode">${code}</div>
   </details>`;
 }
 
@@ -7403,7 +7599,7 @@ const SKILL_KEYS = ['fight','move','operate','sneak','study','survive','talk'];
 // Configurable API base. Empty string = same origin as the page.
 const DM_API_BASE = ''; // e.g. 'https://ro-server.example.com'
 
-const diceUI = { attr: 'might', skill: 'fight', count: 2, lastResult: null };
+const diceUI = { attr: 'might', skill: 'fight', count: 2, difficulty: 1, lastResult: null };
 const roomState = { connected: false, source: null, feed: [] };
 
 function rollDie() { return 1 + Math.floor(Math.random() * 20); }
@@ -7423,7 +7619,7 @@ function renderDicePanel() {
   const skillName = DM_DATA.skillInfo[diceUI.skill].name;
   const selectedAttrExhausted = isAttrExhausted(diceUI.attr);
 
-  return `<div class="sheet-section no-print" style="border-top:1px solid var(--border);padding-top:20px;">
+  return `<div class="sheet-section no-print" id="dicePanelAnchor" style="border-top:1px solid var(--border);padding-top:20px;">
     <div class="sheet-section-title">Dice Roller</div>
     <div class="dice-panel">
       <div class="dice-controls">
@@ -7448,6 +7644,12 @@ function renderDicePanel() {
           </select>
         </div>
         <div class="dice-field">
+          <label>Difficulty</label>
+          <select class="dice-select" id="diceDifficulty" onchange="diceUI.difficulty=parseInt(this.value)||0;renderAll();">
+            ${[0,1,2,3,4,5].map(dv => `<option value="${dv}" ${diceUI.difficulty===dv?'selected':''}>D${dv}</option>`).join('')}
+          </select>
+        </div>
+        <div class="dice-field">
           <label>&nbsp;</label>
           <button class="dice-roll-btn" onclick="doRoll()" ${selectedAttrExhausted ? 'disabled' : ''}>Roll</button>
         </div>
@@ -7457,7 +7659,7 @@ function renderDicePanel() {
       <div id="diceResultArea">${diceUI.lastResult ? renderDiceResult(diceUI.lastResult) : ''}</div>
     </div>
 
-    <div style="margin-top:18px;">
+    <div class="dm-room-block" style="margin-top:18px;">
       <div class="sheet-section-title">Shared Roll Room</div>
       <div class="room-bar">
         <div class="dice-field" style="flex:1;min-width:160px;">
@@ -7487,10 +7689,20 @@ function renderDiceResult(res) {
     return `<div class="die ${cls}">${d}</div>`;
   }).join('');
   const compTxt = res.complications > 0 ? ` <span class="comp">+ ${res.complications} Complication${res.complications>1?'s':''}</span>` : '';
+  // A roll made before v1.14 has no difficulty recorded, so the verdict is omitted
+  // rather than guessed at.
+  const hasDiff = typeof res.difficulty === 'number';
+  const verdict = hasDiff
+    ? `<span class="${res.passed ? 'succ' : 'comp'}">${res.passed ? 'Passed' : 'Failed'} vs D${res.difficulty}</span>`
+    : '';
+  const gained = hasDiff && res.momentumGained > 0
+    ? `<div class="dice-momentum">+${res.momentumGained} Momentum — spend now, or save it to the group pool (max 6).</div>`
+    : '';
   return `<div class="dice-result">
-    <div class="dice-result-target">${res.attrName} ${res.attrValue} (${res.skillName} ${res.skillValue}) — ${res.d20count}d20</div>
+    <div class="dice-result-target">${res.attrName} ${res.attrValue} (${res.skillName} ${res.skillValue}) — ${res.d20count}d20${hasDiff ? ` vs D${res.difficulty}` : ''}</div>
     <div class="dice-faces">${dice}</div>
-    <div class="dice-summary"><span class="succ">${res.successes} success${res.successes===1?'':'es'}</span>${compTxt}</div>
+    <div class="dice-summary"><span class="succ">${res.successes} success${res.successes===1?'':'es'}</span>${compTxt}${verdict ? ' · ' + verdict : ''}</div>
+    ${gained}
   </div>`;
 }
 
@@ -7507,11 +7719,18 @@ function computeRoll(d20count, attr, skill) {
     else if (cls === 'success') successes += 1;
     else if (cls === 'complication') complications += 1;
   });
+  // v1.14: Difficulty is part of the roll rather than something the player works out
+  // afterwards. Momentum gained is successes beyond the Difficulty, so without it the
+  // sheet could not report the one number a player acts on straight after a test.
+  const difficulty = clampNumber(diceUI.difficulty, 0, 5);
   return {
     attr, skill,
     attrName: DM_DATA.attributeInfo[attr].name,
     skillName: DM_DATA.skillInfo[skill].name,
-    attrValue, skillValue, d20count, dice, successes, complications
+    attrValue, skillValue, d20count, dice, successes, complications,
+    difficulty,
+    passed: successes >= difficulty,
+    momentumGained: Math.max(0, successes - difficulty)
   };
 }
 
@@ -7745,5 +7964,433 @@ document.addEventListener('DOMContentLoaded', () => {
   renderLocalLibrary();
 });
 
+</script>
+
+<!-- ============================================================
+     OWLBEAR RODEO EMBEDDED MODE — BETA
+     ------------------------------------------------------------
+     This block is inert unless the page is running inside Owlbear Rodeo.
+     OBR.isAvailable is false in a normal browser tab, in which case nothing
+     below runs and the creator behaves exactly as it does today. That is the
+     whole design: one file, one set of rules, two contexts.
+
+     WHAT IT DOES WHEN EMBEDDED:
+       · reads the character code off the token that opened the modal
+       · loads it and jumps straight to the finalized play sheet
+       · writes the rebuilt code back to the token after every edit
+       · sends rolls to the extension's shared log instead of Ro's server
+       · treats Momentum as the room's pool rather than a private counter
+
+     WHY A MODULE BLOCK AND NOT A SEPARATE FILE:
+       The creator is deliberately one file, so it can be downloaded and opened
+       from disk. A separate script would break that. The cost is that this code
+       cannot be imported by anything else, which is fine — nothing should.
+     ============================================================ -->
+<script type="module">
+// The SDK is loaded lazily, and only when this page is actually inside a frame.
+// A static import would fetch it from esm.sh on every page load, including for
+// someone who opened the creator in a normal tab or from a downloaded copy — a
+// network round trip, and a failed one offline, to load code that would then do
+// nothing. window.self !== window.top is the cheap test that costs nothing and
+// needs no SDK; OBR.isAvailable is the authoritative check once it is loaded.
+let OBR = null;
+
+// These four constants must match dnm.js in the dnm-obr repo exactly. They are
+// the contract between the two halves of the extension: change one, change both.
+const EXT_ID   = "com.thuknights.dnm-obr";
+const CHAR_KEY = `${EXT_ID}/char`;
+const CHANNEL  = `${EXT_ID}/events`;
+const ROOM_KEY = "com.thuknights.dnm-rolls/state";
+
+const SAVE_DEBOUNCE_MS = 400;
+
+let tokenId = null;
+let ready = false;          // true once a character is loaded and saving is allowed
+let saveTimer = null;
+let lastSaved = "";
+let roomMomentum = null;
+
+const bar = () => document.getElementById("obrSaveState");
+
+function setSaveState(text, cls) {
+  const el = bar();
+  if (!el) return;
+  el.textContent = text;
+  el.className = "obr-save" + (cls ? " " + cls : "");
+}
+
+// -------------------------------------------------------------
+// Saving
+// -------------------------------------------------------------
+// The token holds the DM1 code and nothing else, so a save is just
+// buildCharacterCode() written back. Rebuilding the whole code rather than
+// patching CP means the SN snapshot is refreshed too, which is what keeps the
+// roller popover's view of this token's stats current without extra plumbing.
+function queueSave() {
+  if (!ready) return;
+  setSaveState("unsaved", "dirty");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(commit, SAVE_DEBOUNCE_MS);
+}
+
+async function commit() {
+  if (!ready || !tokenId) return;
+  let code;
+  try {
+    code = buildCharacterCode();
+  } catch (err) {
+    console.error("[dnm] could not build code", err);
+    setSaveState("save failed", "failed");
+    return;
+  }
+  if (code === lastSaved) { setSaveState("saved"); return; }
+  try {
+    await OBR.scene.items.updateItems([tokenId], (items) => {
+      for (const it of items) it.metadata[CHAR_KEY] = { v: 1, code };
+    });
+    lastSaved = code;
+    setSaveState("saved");
+  } catch (err) {
+    console.error("[dnm] save failed", err);
+    setSaveState("save failed", "failed");
+  }
+}
+
+// Every mutation in this file funnels through renderAll(), so wrapping it is one
+// hook instead of thirty. The alternative was calling queueSave() from each
+// handler, which would be missed the first time a new handler was added.
+function hookRenderAll() {
+  const original = window.renderAll;
+  window.renderAll = function patchedRenderAll(...args) {
+    const out = original.apply(this, args);
+    queueSave();
+    return out;
+  };
+}
+
+// -------------------------------------------------------------
+// Rolls
+// -------------------------------------------------------------
+// postRoll() normally POSTs to Ro's server. Embedded, the extension's broadcast
+// channel already carries rolls to every open panel and to the GM's background
+// page, which persists them. Replacing the function rather than editing doRoll()
+// keeps the standalone path untouched.
+//
+// OPEN: the creator's dice panel has no Difficulty control, so the entry cannot
+// carry a real pass/fail verdict. Successes and complications are exact; the
+// verdict is reported as passed on one or more successes, which matches D1, the
+// commonest case. Adding Difficulty to the panel is the proper fix.
+function installRollBridge() {
+  window.postRoll = function postRollToOwlbear(from, res) {
+    const detail = res.dice.map((d) => ({ d, kind: classifyDie(d, res.attrValue, res.skillValue) }));
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      t: Date.now(),
+      who: (from || "Unnamed").slice(0, 24),
+      label: "",
+      an: res.attrName, av: res.attrValue,
+      sn: res.skillName, sv: res.skillValue,
+      diff: 0,
+      detail,
+      succ: res.successes,
+      comp: res.complications,
+      pass: res.successes > 0,
+      gain: 0,
+    };
+    OBR.broadcast.sendMessage(CHANNEL, { type: "roll", entry }, { destination: "ALL" })
+      .catch((err) => console.warn("[dnm] roll broadcast failed", err));
+  };
+}
+
+// -------------------------------------------------------------
+// Momentum
+// -------------------------------------------------------------
+// Momentum is a group pool: DM_DATA's own resource text says the group can save
+// up to 6, and the Circumspect drive refers to the group pool explicitly. This
+// file tracks it per character anyway, which is harmless alone and wrong at a
+// table. Embedded, currentMomentum IS the room's pool.
+//
+// WHY AN ACCESSOR RATHER THAN A WRAPPED FUNCTION:
+// The first attempt overrode adjustResource(), which is what the counter's + and −
+// buttons call. It caught one of six write paths and therefore looked correct while
+// being wrong everywhere else. The others are: setResource() from the number input,
+// the direct `-=` in the three Momentum-spending abilities, the direct `=` in
+// Adrenaline Rush, and the clamp in normalizeCurrentValues().
+//
+// Defining currentMomentum as a property on the character object catches all of
+// them, including any added later, because there is no way to write the field that
+// does not go through the setter. JSON.stringify reads accessors normally, so
+// buildCharacterCode() still serialises a plain number.
+function bindMomentumToRoom(character) {
+  if (!character || Object.getOwnPropertyDescriptor(character, "currentMomentum")?.get) return;
+
+  // Seed from the room if it is known, otherwise from whatever the code carried.
+  let mirror = roomMomentum != null ? roomMomentum : (character.currentMomentum || 0);
+
+  Object.defineProperty(character, "currentMomentum", {
+    configurable: true,
+    enumerable: true,
+    get: () => mirror,
+    set: (value) => {
+      const next = Math.max(0, Math.round(Number(value) || 0));
+      const delta = next - mirror;
+      if (delta === 0) return;
+      // Applied locally straight away so the counter responds to the click. This
+      // is safe to do here, unlike in the roller: the sheet never applies pool
+      // events from the broadcast channel, and the GM's metadata update sets the
+      // value absolutely rather than as a delta, so there is nothing to double.
+      mirror = next;
+      OBR.broadcast.sendMessage(CHANNEL, { type: "pool", pool: "momentum", delta }, { destination: "ALL" })
+        .catch((err) => console.warn("[dnm] pool broadcast failed", err));
+    },
+  });
+
+  // Lets adoptRoom() write the GM's authoritative value in without the setter
+  // treating it as a local spend and echoing it back to the table.
+  Object.defineProperty(character, "__setMomentumFromRoom", {
+    configurable: true,
+    enumerable: false,   // never part of a serialised character
+    value: (value) => { mirror = Math.max(0, Math.round(Number(value) || 0)); },
+  });
+}
+
+// Threat is the room's pool, exactly like Momentum, but it is not a field on the
+// character so there is nothing to bind an accessor to. Instead the creator funnels
+// every Threat change through addThreat(), and this replaces that function.
+//
+// Unlike Momentum this is not applied locally first. Momentum needed the instant
+// response because the player is spending their own resource and watching the
+// counter; Threat is announced to the table and the GM's update lands a moment
+// later, so waiting keeps one writer and avoids a double count if the same click
+// is somehow delivered twice.
+function installThreatBridge() {
+  const original = window.addThreat;
+  window.addThreat = function patchedAddThreat(amount, reason) {
+    const n = Math.round(Number(amount) || 0);
+    if (!n) return;
+    OBR.broadcast.sendMessage(CHANNEL, { type: "pool", pool: "threat", delta: n }, { destination: "ALL" })
+      .catch((err) => console.warn("[dnm] threat broadcast failed", err));
+    // Still shows the toast, so the player sees what was pushed and why.
+    if (typeof original === "function") original(n, reason);
+  };
+}
+
+function adoptRoom(meta) {
+  const found = meta && meta[ROOM_KEY];
+  const next = found && typeof found.momentum === "number" ? found.momentum : 0;
+  const nextThreat = found && typeof found.threat === "number" ? found.threat : 0;
+  const changed = next !== roomMomentum || nextThreat !== obrThreat;
+  roomMomentum = next;
+  obrThreat = nextThreat;
+  if (!changed || !ready) return;
+  if (state.character.__setMomentumFromRoom) state.character.__setMomentumFromRoom(next);
+  else state.character.currentMomentum = next;
+  renderAll();
+}
+
+// -------------------------------------------------------------
+// Loading
+// -------------------------------------------------------------
+// The embedded header carries the three things the old sheet.html header had and
+// the creator has no reason to: get the code out, break the link to the token, and
+// close the modal. Built rather than declared, so it cannot reference an element
+// that is not there.
+function insertBar(name) {
+  if (document.getElementById("obrBar")) return;
+
+  const el = document.createElement("div");
+  el.id = "obrBar";
+  el.className = "obr-bar obr-only";
+
+  const who = document.createElement("span");
+  who.className = "obr-name";
+  who.textContent = name || "Character";
+
+  const on = document.createElement("span");
+  on.className = "obr-on";
+  on.textContent = "on this token";
+
+  const save = document.createElement("span");
+  save.className = "obr-save";
+  save.id = "obrSaveState";
+  save.textContent = "saved";
+
+  const actions = document.createElement("div");
+  actions.className = "obr-actions";
+
+  const button = (label, cls, handler) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "obr-btn" + (cls ? " " + cls : "");
+    b.textContent = label;
+    b.addEventListener("click", handler);
+    return b;
+  };
+
+  actions.append(
+    button("Copy code", "", copyCodeToClipboard),
+    button("Detach", "danger", detachFromToken),
+    button("Close", "primary", closeModal),
+  );
+
+  el.append(who, on, save, actions);
+  document.getElementById("app").prepend(el);
+}
+
+async function copyCodeToClipboard() {
+  // Flush first: copying a code that predates the last edit is worse than a slow
+  // copy, and the save is debounced by a few hundred milliseconds.
+  clearTimeout(saveTimer);
+  await commit();
+  const code = buildCharacterCode();
+  try {
+    await navigator.clipboard.writeText(code);
+    setSaveState("code copied");
+    setTimeout(() => setSaveState("saved"), 2000);
+  } catch (err) {
+    // Clipboard writes can be refused inside an iframe. Fall back to opening the
+    // share code block and selecting it, so the player can copy it by hand.
+    const block = document.getElementById("shareCodeBlock");
+    const field = document.getElementById("charCode");
+    if (block) block.open = true;
+    if (field) {
+      field.scrollIntoView({ behavior: "smooth", block: "center" });
+      const range = document.createRange();
+      range.selectNodeContents(field);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    setSaveState("copy blocked — code selected below", "dirty");
+  }
+}
+
+async function detachFromToken() {
+  if (!confirm("Remove this character from the token? The token keeps no copy, so copy the code first if you want to keep it.")) return;
+  try {
+    await OBR.scene.items.updateItems([tokenId], (items) => {
+      for (const it of items) delete it.metadata[CHAR_KEY];
+    });
+    ready = false;
+    closeModal();
+  } catch (err) {
+    console.error("[dnm] detach failed", err);
+    setSaveState("detach failed", "failed");
+  }
+}
+
+// OBR.modal.close needs the exact id the modal was opened with, and that differs
+// between the beta background page and the stable one. Rather than hardcode either
+// and break under the other, close both: closing an id that is not open is a no-op.
+function closeModal() {
+  for (const id of [`${EXT_ID}/sheet-modal-beta`, `${EXT_ID}/sheet-modal`]) {
+    try { OBR.modal.close(id); } catch (err) { /* not the one that is open */ }
+  }
+}
+
+function loadIntoCreator(code) {
+  const result = parseCharacterCode(code);
+  if (result.error) return result.error;
+  state.character = { ...getDefaultCharacter(), ...result.character };
+  // A character on a token is by definition already built, so the sheet opens on
+  // the play view rather than at step one of the wizard.
+  state.character.finalized = true;
+  state.currentStep = STEPS.indexOf("summary");
+  // Must be bound before normalizeCurrentValues(), which clamps the field and would
+  // otherwise write a private number over the pool.
+  bindMomentumToRoom(state.character);
+  const importSection = document.getElementById("importSection");
+  if (importSection) importSection.style.display = "none";
+  normalizeCurrentValues();
+  ready = true;
+  lastSaved = code;
+  renderAll();
+  insertBar(state.character.name);
+  setSaveState("saved");
+  return null;
+}
+
+// Pasting a code on an empty token has to write it through to the token, which
+// the standalone import path has no reason to do.
+function hookImport() {
+  const original = window.importCharacter;
+  window.importCharacter = function patchedImportCharacter(...args) {
+    const out = original.apply(this, args);
+    if (state.character && state.character.finalized === false) {
+      state.character.finalized = true;
+    }
+    // importCharacter() assigns a fresh object, so the accessor has to be reapplied
+    // or this character would go back to a private Momentum counter.
+    bindMomentumToRoom(state.character);
+    if (document.getElementById("importSection")?.style.display === "none") {
+      ready = true;
+      insertBar(state.character.name);
+      renderAll();
+      commit();
+    }
+    return out;
+  };
+}
+
+// -------------------------------------------------------------
+// Start
+// -------------------------------------------------------------
+async function startEmbedded() {
+  document.body.classList.add("obr-embedded");
+
+  hookRenderAll();
+  hookImport();
+  installRollBridge();
+  installThreatBridge();
+
+  try {
+    adoptRoom(await OBR.room.getMetadata());
+  } catch (err) {
+    console.warn("[dnm] could not read room state", err);
+  }
+  OBR.room.onMetadataChange(adoptRoom);
+
+  const params = new URLSearchParams(location.search);
+  tokenId = params.get("item");
+  if (!tokenId) return; // opened without a token: leave the import screen up
+
+  let item = null;
+  try {
+    const items = await OBR.scene.items.getItems([tokenId]);
+    item = items && items[0];
+  } catch (err) {
+    console.error("[dnm] could not read the token", err);
+  }
+  if (!item) return;
+
+  const stored = item.metadata && item.metadata[CHAR_KEY];
+  if (!stored || !stored.code) return; // fresh token: the import screen is the prompt
+
+  const error = loadIntoCreator(stored.code);
+  if (error) {
+    const box = document.getElementById("importError");
+    if (box) box.textContent = "⚠ " + error;
+  }
+}
+
+async function boot() {
+  // Not framed: this is a normal browser tab. Nothing below runs, nothing is
+  // fetched, and the creator behaves exactly as it always has.
+  if (window.self === window.top) return;
+
+  try {
+    const mod = await import("https://esm.sh/@owlbear-rodeo/sdk@3.1.0");
+    OBR = mod.default;
+  } catch (err) {
+    // Framed by something that is not Owlbear, or the CDN is unreachable. The
+    // creator still works; it just will not talk to a token.
+    console.warn("[dnm] Owlbear SDK unavailable, running as a plain page", err);
+    return;
+  }
+
+  if (OBR && OBR.isAvailable) OBR.onReady(startEmbedded);
+}
+
+boot();
 </script>
 </body>
