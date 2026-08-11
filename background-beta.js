@@ -22,7 +22,11 @@ const BASE = new URL(".", import.meta.url).href;
 //
 // The roll log key is deliberately NOT suffixed: both versions write to the same
 // shared log, so a table running a mix of the two still sees one feed.
-const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/dnm-character-creator.html";
+// The directory URL, not a filename. dnm-cc publishes the creator as index.html,
+// so pointing at dnm-character-creator.html 404s — and hardcoding any filename
+// makes this break again the day the file is renamed. The folder root always
+// resolves to whatever index.html is there.
+const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/";
 const BETA = "-beta";
 
 function setupContextMenu() {
