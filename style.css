@@ -203,6 +203,15 @@ button:disabled { opacity: .25; cursor: not-allowed; }
 .entry-sum.pass { color: var(--teal); }
 .entry-sum.fail { color: var(--accent); }
 
+/* v1.17: action entries. Marked down the left edge so a GM scanning the feed can tell
+   at a glance which lines are dice and which are somebody spending from a pool. The
+   label is not italic here, unlike a roll's optional label, because on an action it
+   carries the actual content — the ability or item name. */
+.entry.entry-action { border-left: 2px solid var(--teal-dim); padding-left: 7px; }
+.entry.entry-action .entry-label { font-style: normal; color: var(--text); }
+.entry-sum.pool-momentum { color: var(--teal); }
+.entry-sum.pool-threat { color: var(--accent); }
+
 .status { font-size: 10px; color: var(--warning); min-height: 13px; text-align: center; font-family: var(--font-mono); }
 
 /* Selected-character banner --------------------------------- */

@@ -229,6 +229,51 @@ function render() {
 }
 
 function renderEntry(e) {
+  // v1.17: the log carries two shapes now. A roll entry has dice; an action entry has
+  // none, and reading e.detail.length on one would throw and take the whole feed down
+  // with it. Entries written before v1.17 have no kind field at all, so absent means
+  // roll — the entries already in a live room's metadata have to keep rendering.
+  if (e.kind === "action") return renderActionEntry(e);
+  return renderRollEntry(e);
+}
+
+function renderActionEntry(e) {
+  const li = document.createElement("li");
+  li.className = "entry entry-action";
+
+  const head = document.createElement("div");
+  head.className = "entry-head";
+  const who = document.createElement("strong");
+  who.textContent = e.who;
+  head.append(who);
+  const lab = document.createElement("span");
+  lab.className = "entry-label";
+  lab.textContent = e.label;
+  head.append(lab);
+  li.append(head);
+
+  if (e.detail) {
+    const detail = document.createElement("div");
+    detail.className = "entry-test";
+    detail.textContent = e.detail;
+    li.append(detail);
+  }
+
+  // The pool movement is the part a GM scans for, so it gets its own line and its own
+  // colour rather than being folded into the detail text.
+  if (e.pool && e.delta) {
+    const sum = document.createElement("div");
+    sum.className = "entry-sum pool-" + e.pool;
+    const sign = e.delta > 0 ? "+" : "\u2212";
+    const name = e.pool === "momentum" ? "Momentum" : "Threat";
+    sum.textContent = `${sign}${Math.abs(e.delta)} ${name}`;
+    li.append(sum);
+  }
+
+  return li;
+}
+
+function renderRollEntry(e) {
   const li = document.createElement("li");
   li.className = "entry" + (e.hidden ? " is-hidden" : "");
 

@@ -39,6 +39,19 @@ export function applyEvent(state, ev) {
     if (next.log.some((e) => e.id === ev.entry.id)) return next;
     next.log.unshift(ev.entry);
     next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+  } else if (ev?.type === "action" && ev.entry) {
+    // v1.17. Actions share the log with rolls: same dedupe by id, same cap, same
+    // trim budget. They are deliberately not a second list — the point of the log
+    // is one ordered record of what happened at the table, and two lists would
+    // need interleaving by timestamp at every consumer instead of once here.
+    //
+    // An action entry carries kind:"action". A roll entry carries no kind at all,
+    // including the ones already sitting in a live room's metadata from before
+    // v1.17, which is why consumers must treat a missing kind as a roll rather
+    // than requiring the field.
+    if (next.log.some((e) => e.id === ev.entry.id)) return next;
+    next.log.unshift(ev.entry);
+    next.log = next.log.slice(0, MAX_LOG_ENTRIES);
   } else if (ev?.type === "pool" && (ev.pool === "momentum" || ev.pool === "threat")) {
     next[ev.pool] = Math.max(0, (next[ev.pool] || 0) + (ev.delta || 0));
   } else if (ev?.type === "clear") {
