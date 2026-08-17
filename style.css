@@ -199,6 +199,42 @@ button:disabled { opacity: .25; cursor: not-allowed; }
 .die.crit { background: var(--teal); border-color: var(--text-bright); color: var(--bg); font-weight: 700; }
 .die.complication { background: rgba(255,107,53,.15); border-color: var(--accent); color: var(--accent); font-weight: 700; }
 
+/* v0.8.0: GM table controls. Visually separated from the roll controls above it,
+   because pressing one of these affects every character at the table rather than
+   just this window. */
+.gm-panel {
+  border: 1px solid var(--teal-dim);
+  background: rgba(0, 122, 122, 0.06);
+  padding: 9px 10px;
+  margin-bottom: 10px;
+}
+.gm-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.gm-panel-head h2 { margin: 0; font-size: 12px; letter-spacing: 0.06em; }
+.gm-badge {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.12em;
+  color: var(--teal); border: 1px solid var(--teal-dim); padding: 1px 5px;
+}
+.gm-group { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.gm-group-label {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text-dim); width: 56px; flex: none;
+}
+.gm-buttons { display: flex; flex-wrap: wrap; gap: 5px; }
+.gm-btn {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em;
+  padding: 4px 8px; cursor: pointer;
+  background: transparent; color: var(--text); border: 1px solid var(--border);
+}
+.gm-btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
+.gm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.gm-note {
+  font-family: var(--font-mono); font-size: 9px; line-height: 1.5;
+  color: var(--text-dim); margin: 6px 0 0;
+}
+
 .entry-sum { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
 .entry-sum.pass { color: var(--teal); }
 .entry-sum.fail { color: var(--accent); }

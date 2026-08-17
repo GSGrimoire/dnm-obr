@@ -1,9 +1,9 @@
 {
   "name": "Dreams & Machines",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "manifest_version": 1,
   "author": "GS Grimoire",
-  "description": "Dreams and Machines character sheet, dice roller, and shared Rolls and Actions log",
+  "description": "Dreams and Machines character sheet, dice roller, shared Rolls and Actions log, and GM table controls",
   "icon": "https://gsgrimoire.github.io/dnm-obr/icon.svg",
   "background_url": "https://gsgrimoire.github.io/dnm-obr/background.html",
   "permissions": [

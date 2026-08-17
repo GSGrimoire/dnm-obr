@@ -107,6 +107,34 @@
     </div>
   </section>
 
+  <!-- GM only. Hidden entirely for players by roller.js, not merely disabled: these
+       push a boundary to every character at the table, and it should not look like
+       something a player might be allowed to press. -->
+  <section id="gm-panel" class="gm-panel" hidden>
+    <div class="gm-panel-head">
+      <h2>Table Controls</h2>
+      <span class="gm-badge">GM</span>
+    </div>
+    <div class="gm-group">
+      <span class="gm-group-label">Rest</span>
+      <div class="gm-buttons">
+        <button class="gm-btn" data-epoch="breather">Breather</button>
+        <button class="gm-btn" data-epoch="break">Break</button>
+        <button class="gm-btn" data-epoch="bed">Bed</button>
+      </div>
+    </div>
+    <div class="gm-group">
+      <span class="gm-group-label">Boundary</span>
+      <div class="gm-buttons">
+        <button class="gm-btn" data-epoch="scene">End Scene</button>
+        <button class="gm-btn" data-epoch="session">New Session</button>
+        <button class="gm-btn" data-epoch="adventure">New Adventure</button>
+      </div>
+    </div>
+    <p class="gm-note">Applies to every attached character. A sheet that is closed
+      catches up the next time it is opened.</p>
+  </section>
+
   <section class="log-section">
     <div class="log-header">
       <h2>Rolls and Actions</h2>

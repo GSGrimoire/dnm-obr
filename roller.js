@@ -21,7 +21,7 @@
 
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
 import {
-  ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE,
+  ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
 } from "./dnm.js";
 
@@ -60,6 +60,7 @@ const statusEl = el("status");
 const hiddenWrap = el("hidden-wrap");
 const hiddenCheck = el("hidden-roll");
 const clearBtn = el("clear-log");
+const gmPanel = el("gm-panel");
 
 // -------------------------------------------------------------
 // Shared state
@@ -358,6 +359,51 @@ function applyRole() {
   const isGM = role === "GM";
   hiddenWrap.hidden = !isGM;
   clearBtn.hidden = !isGM;
+  if (gmPanel) gmPanel.hidden = !isGM;
+}
+
+// -------------------------------------------------------------
+// Table controls (0.8.0)
+// -------------------------------------------------------------
+// A rest or a scene boundary is per-character state living inside each token's DM1
+// code. The extension does not read that code and should not start now, so the GM
+// does not reach into characters here — it increments a counter and each sheet
+// reconciles itself against it when it opens.
+const EPOCH_LABELS = {
+  breather: "Breather", break: "Break", bed: "Bed",
+  scene: "End Scene", session: "New Session", adventure: "New Adventure",
+};
+
+async function pushEpoch(boundary) {
+  if (role !== "GM" || !EPOCH_KEYS.includes(boundary)) return;
+  const label = EPOCH_LABELS[boundary] || boundary;
+  await announce({
+    type: "epoch",
+    boundary,
+    entry: {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      t: Date.now(),
+      kind: "action",
+      who: "GM",
+      label,
+      detail: "called for the whole table",
+    },
+  });
+  setStatus(`${label} sent to the table.`);
+}
+
+function wireGmPanel() {
+  if (!gmPanel) return;
+  gmPanel.querySelectorAll("[data-epoch]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      // Double-press guard. Each press is a real increment every sheet will act on,
+      // so an accidental second click is a second rest at the table.
+      btn.disabled = true;
+      pushEpoch(btn.dataset.epoch).finally(() => {
+        setTimeout(() => { btn.disabled = false; }, 800);
+      });
+    });
+  });
 }
 
 // -------------------------------------------------------------
@@ -368,6 +414,7 @@ async function startInOwlbear() {
   playerName = (await OBR.player.getName()) || "Someone";
   if (!charEl.value) charEl.value = playerName;
   applyRole();
+  wireGmPanel();
 
   await load();
   render();

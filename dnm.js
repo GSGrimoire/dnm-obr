@@ -9,7 +9,28 @@ export const CHAR_KEY = `${ID}/char`;
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
 
-export const EMPTY_STATE = { v: 1, momentum: 0, threat: 0, log: [] };
+// v2 (extension 0.8.0): epochs added. A client running the v1 shape simply has no
+// epochs key; readers must default it rather than assume presence, because room
+// metadata written before 0.8.0 is still sitting in live rooms.
+export const EMPTY_STATE = {
+  v: 2, momentum: 0, threat: 0, log: [],
+  epochs: { scene: 0, session: 0, adventure: 0, breather: 0, break: 0, bed: 0 },
+};
+
+// The boundaries a GM can push to the whole table. Rests are listed alongside scene
+// boundaries because they work the same way here: a counter the GM increments and
+// each sheet catches up to. They differ only in what the sheet does on arrival.
+export const EPOCH_KEYS = ["scene", "session", "adventure", "breather", "break", "bed"];
+
+export function emptyEpochs() {
+  return EPOCH_KEYS.reduce((acc, k) => { acc[k] = 0; return acc; }, {});
+}
+
+// Always read epochs through this. Rooms predating 0.8.0 have no epochs key at all,
+// and a partial object is possible if a key is added in a later version.
+export function readEpochs(state) {
+  return { ...emptyEpochs(), ...(state?.epochs || {}) };
+}
 export const MAX_LOG_ENTRIES = 40;
 export const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
 
@@ -52,6 +73,27 @@ export function applyEvent(state, ev) {
     if (next.log.some((e) => e.id === ev.entry.id)) return next;
     next.log.unshift(ev.entry);
     next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+  } else if (ev?.type === "epoch" && EPOCH_KEYS.includes(ev.boundary)) {
+    // v0.8.0. The GM pushes a boundary to the whole table by incrementing a counter
+    // here. Nothing about any character is touched, and nothing needs to know what a
+    // character looks like — this file stays ignorant of the DM1 format, which is the
+    // whole reason the snapshot split exists.
+    //
+    // Each sheet stores the epoch it last applied and catches up when it next opens.
+    // That is what makes this work for the sheets that are CLOSED, which at any moment
+    // is nearly all of them. A broadcast alone would only reach whoever happened to be
+    // looking at their sheet when the GM pressed the button.
+    //
+    // Monotonic increment, never assignment: two GMs, or a GM with the panel open in
+    // two windows, cannot clobber each other into a lower value.
+    const epochs = readEpochs(next);
+    epochs[ev.boundary] = epochs[ev.boundary] + 1;
+    next.epochs = epochs;
+    // The press is logged like any other action so the table sees who called the rest.
+    if (ev.entry && !next.log.some((e) => e.id === ev.entry.id)) {
+      next.log.unshift(ev.entry);
+      next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+    }
   } else if (ev?.type === "pool" && (ev.pool === "momentum" || ev.pool === "threat")) {
     next[ev.pool] = Math.max(0, (next[ev.pool] || 0) + (ev.delta || 0));
   } else if (ev?.type === "clear") {
@@ -63,6 +105,9 @@ export function applyEvent(state, ev) {
 // Trim to fit the room metadata budget before writing.
 export function trimState(state) {
   const next = { ...state };
+  // Epochs are a fixed handful of integers and must survive trimming. Losing one
+  // would send every sheet backwards and re-apply a boundary the table already had.
+  next.epochs = readEpochs(next);
   next.log = (next.log || []).slice(0, MAX_LOG_ENTRIES);
   while (next.log.length > 1 && JSON.stringify(next).length > MAX_STATE_BYTES) next.log.pop();
   return next;
