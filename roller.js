@@ -130,6 +130,30 @@ async function stepPool(pool, delta) {
   // Pool events are deltas, so they are not applied optimistically. Applying
   // locally and then again from the GM's update would double count.
   await announce({ type: "pool", pool, delta });
+
+  // v0.8.1: the roller's own +/- buttons were the last unlogged way to move a pool.
+  // The sheet has logged its pool changes since v1.17, so a number moving with no
+  // entry beside it meant someone had used these buttons — invisible, and exactly the
+  // ambiguity the log exists to remove.
+  //
+  // The roller has no idea which character an Owlbear login is playing. It knows the
+  // Owlbear display name and, when a token is selected, that token's character name.
+  // Prefer the character, fall back to the login, and say plainly that it was a manual
+  // adjustment so it is not mistaken for an ability.
+  const who = (charEl.value || "").trim().slice(0, 24) || playerName;
+  await announce({
+    type: "action",
+    entry: {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      t: Date.now(),
+      kind: "action",
+      who,
+      label: "Manual adjustment",
+      detail: `${delta > 0 ? "added" : "removed"} ${Math.abs(delta)} ${pool === "momentum" ? "Momentum" : "Threat"}`,
+      pool,
+      delta,
+    },
+  });
 }
 
 async function clearLog() {
@@ -392,16 +416,43 @@ async function pushEpoch(boundary) {
   setStatus(`${label} sent to the table.`);
 }
 
+// Two-step confirm. A disable-after-click guard stops a double press but does nothing
+// about the first one being a misclick, and these are expensive to get wrong: every
+// attached character acts on it, and there is no undo. First click arms and relabels,
+// second click sends. Arming clears after 4 seconds, and arming one button disarms any
+// other, so a stray click elsewhere in the panel cannot fire something armed earlier.
+let armedEpochBtn = null;
+let armTimer = null;
+
+function disarmEpochButtons() {
+  if (armedEpochBtn) {
+    armedEpochBtn.textContent = armedEpochBtn.dataset.label;
+    armedEpochBtn.classList.remove("armed");
+    armedEpochBtn = null;
+  }
+  if (armTimer) { clearTimeout(armTimer); armTimer = null; }
+}
+
 function wireGmPanel() {
   if (!gmPanel) return;
   gmPanel.querySelectorAll("[data-epoch]").forEach((btn) => {
+    btn.dataset.label = btn.textContent;
     btn.addEventListener("click", () => {
-      // Double-press guard. Each press is a real increment every sheet will act on,
-      // so an accidental second click is a second rest at the table.
-      btn.disabled = true;
-      pushEpoch(btn.dataset.epoch).finally(() => {
-        setTimeout(() => { btn.disabled = false; }, 800);
-      });
+      if (armedEpochBtn === btn) {
+        const boundary = btn.dataset.epoch;
+        disarmEpochButtons();
+        btn.disabled = true;
+        pushEpoch(boundary).finally(() => {
+          setTimeout(() => { btn.disabled = false; }, 800);
+        });
+        return;
+      }
+      disarmEpochButtons();
+      armedEpochBtn = btn;
+      btn.textContent = "Confirm?";
+      btn.classList.add("armed");
+      setStatus(`${btn.dataset.label} — press again to send to the table.`);
+      armTimer = setTimeout(() => { disarmEpochButtons(); setStatus(""); }, 4000);
     });
   });
 }

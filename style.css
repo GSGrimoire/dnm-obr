@@ -230,6 +230,12 @@ button:disabled { opacity: .25; cursor: not-allowed; }
 }
 .gm-btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
 .gm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Armed state for the two-step confirm. Deliberately loud: an armed button is one
+   click from affecting every character at the table. */
+.gm-btn.armed {
+  border-color: var(--accent); color: var(--accent);
+  background: rgba(255, 107, 53, 0.12);
+}
 .gm-note {
   font-family: var(--font-mono); font-size: 9px; line-height: 1.5;
   color: var(--text-dim); margin: 6px 0 0;
