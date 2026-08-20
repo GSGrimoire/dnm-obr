@@ -241,6 +241,35 @@ button:disabled { opacity: .25; cursor: not-allowed; }
   color: var(--text-dim); margin: 6px 0 0;
 }
 
+/* v0.9.0: party panel. Same framing as the table controls above it — this is GM
+   furniture, not something a player is meant to be looking at — but it is read
+   rather than pressed, so the rows are quiet and the status is the only colour. */
+.party-panel {
+  border: 1px solid var(--teal-dim);
+  background: rgba(0, 122, 122, 0.06);
+  padding: 9px 10px;
+  margin-bottom: 10px;
+}
+.party-list { list-style: none; max-height: 190px; overflow-y: auto; }
+.party-row { border-top: 1px solid var(--border); padding: 6px 0; }
+.party-row:first-child { border-top: none; }
+.party-head { display: flex; align-items: baseline; gap: 8px; }
+.party-name {
+  font-family: var(--font-display); font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text-bright);
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.party-spirit { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); flex: none; }
+.party-status {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
+  text-transform: uppercase; padding: 1px 5px; border: 1px solid; flex: none;
+}
+.party-status.is-current { color: var(--teal); border-color: var(--teal-dim); }
+.party-status.is-behind { color: var(--accent); border-color: var(--accent); background: rgba(255,107,53,.12); }
+.party-status.is-unsynced { color: var(--text-dim); border-color: var(--border); }
+.party-detail { font-family: var(--font-mono); font-size: 9px; color: var(--accent); margin-top: 3px; }
+.party-empty { color: var(--text-dim); font-style: italic; padding: 6px 0; font-size: 12px; }
+
 .entry-sum { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
 .entry-sum.pass { color: var(--teal); }
 .entry-sum.fail { color: var(--accent); }
