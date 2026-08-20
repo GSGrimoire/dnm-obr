@@ -4,7 +4,7 @@ An Owlbear Rodeo extension for Dreams & Machines: shared Skill Tests, a roll log
 survives refreshes and rejoins, shared Momentum and Threat counters, and full character
 sheets imported from the character creator.
 
-There is no build step. No Node, no npm, no terminal. Five static files pushed to a
+There is no build step. No Node, no npm, no terminal. Static files pushed to a
 GitHub repo with Pages turned on.
 
 ---
