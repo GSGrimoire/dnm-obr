@@ -1,11 +1,11 @@
 # Dreams & Machines — Rolls
 
-An Owlbear Rodeo extension for Dreams & Machines: shared Skill Tests, a roll log that
-survives refreshes and rejoins, shared Momentum and Threat counters, and full character
-sheets imported from the character creator.
+An Owlbear Rodeo extension for Dreams & Machines: shared Skill Tests, a Rolls and Actions
+log that survives refreshes and rejoins, shared Momentum and Threat counters, GM table
+controls, a GM party panel, and full character sheets imported from the character creator.
 
-There is no build step. No Node, no npm, no terminal. Static files pushed to a
-GitHub repo with Pages turned on.
+There is no build step. No Node, no npm, no terminal. Static files pushed to a GitHub repo
+with Pages turned on.
 
 ---
 
@@ -20,12 +20,16 @@ it now does.
 Upload all files to the root of it:
 
 ```
-manifest.json      background.html    sheet.html
-index.html         background.js      sheet.js
-roller.js          dnm.js             sheet.css
-style.css          icon.svg           icon-attach.svg
-                                      icon-sheet.svg
+manifest.json      background.html    icon.svg
+index.html         background.js      icon-attach.svg
+roller.js          dnm.js             icon-sheet.svg
+style.css
 ```
+
+`sheet.html`, `sheet.js`, `sheet.css`, `rules.js` and `build-rules.mjs` were the
+duplicate-sheet approach and were **deleted at 0.7.0**, when the modal switched to
+opening the published character creator instead. This list was stale until 0.9.0.
+Nothing should reintroduce a local sheet page.
 
 You can drag them into the GitHub web uploader. Nothing needs installing locally.
 
@@ -96,8 +100,10 @@ other. At a five-person table this is rare enough to ignore.
 
 ## The rules it implements
 
-Taken directly from `classifyDie()` in `dnm-character-creator.html` v1.10, so the
-extension and the character creator can never disagree:
+Taken directly from `classifyDie()` in the character creator, which is published as
+`index.html` at `gsgrimoire.github.io/dnm-cc/`, so the extension and the creator can never
+disagree. (This paragraph named `dnm-character-creator.html` until 0.9.0. That file was a
+v1.13 spike, was never the deployed sheet, and no longer exists.)
 
 - A natural 20 is a Complication and nothing else
 - A die at or under the **Skill** value is a Critical, worth 2 successes
@@ -113,8 +119,10 @@ One quirk inherited from the creator: if a Skill value is ever higher than the A
 value, dice between the two count as Criticals. Probably never comes up in play, but the
 extension behaves the same way the creator does rather than silently diverging.
 
-Exhaustion is not modelled. The creator blocks rolls against a shut-down Attribute, which
-needs the character sheet to know about; that arrives with character import.
+Exhaustion **is** modelled, from creator v1.12 onward: the snapshot carries the exhaustion
+table, `shutDownAttrs()` in `dnm.js` reads it against the character's `activeExhaustion`,
+and the selected-character banner names any shut-down Attributes. This paragraph said the
+opposite until 0.9.0.
 
 
 ---
@@ -148,7 +156,27 @@ result lands in the same shared log the roller popover shows. Dice beyond the fi
 cost one Spirit each and are deducted automatically; the button disables if the character
 cannot pay.
 
-### Not carried across yet
+### Momentum
 
-Exhaustion, and the creator's per-character Momentum pool, which is a separate thing from
-the shared room pool the roller tracks. Worth deciding which one your table actually uses.
+The creator's per-character Momentum is bound to the **room** pool when the sheet runs
+inside Owlbear, so there is one shared number rather than two competing ones. In a plain
+browser tab it stays private to that character.
+
+---
+
+## Table controls and the party panel (GM only)
+
+**Table Controls** (0.8.0) push a rest or a scene boundary to every attached character by
+incrementing a counter in room metadata. Each sheet catches up the next time it is opened,
+which is what makes it work for the sheets that are closed — at any moment, nearly all of
+them. Buttons arm on the first press and send on the second.
+
+**Party** (0.9.0) answers the question those buttons leave open: you pressed Bed, but who
+actually got it? It lists every character on a token in the scene with their Spirit and one
+of three states:
+
+- **Caught up** — level with the room.
+- **Behind** — has not applied a boundary the table has passed. The row names which one.
+- **Not synced** — has never met this room. A newly built or newly attached character reads
+  this way and is **not** behind: it has nothing to catch up on, and its first sheet open
+  adopts the room's position without applying anything.

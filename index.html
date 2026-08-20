@@ -135,6 +135,20 @@
       catches up the next time it is opened.</p>
   </section>
 
+  <!-- GM only, 0.9.0. Answers the question the buttons above leave open: you pressed
+       Bed, but who actually got it? Reads every token in the scene carrying a
+       character and reports where each one stands. -->
+  <section id="party-panel" class="party-panel" hidden>
+    <div class="gm-panel-head">
+      <h2>Party</h2>
+      <span class="gm-badge">GM</span>
+    </div>
+    <ol id="party-list" class="party-list"></ol>
+    <p class="gm-note" id="party-note">A character catches up when its sheet is next
+      opened. Not synced means the character has never met this room and has nothing
+      to catch up on.</p>
+  </section>
+
   <section class="log-section">
     <div class="log-header">
       <h2>Rolls and Actions</h2>
