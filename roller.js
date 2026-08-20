@@ -22,8 +22,7 @@
 import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
 import {
   ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
-  EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
-  readEpochs, epochStatus,
+  rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -62,8 +61,6 @@ const hiddenWrap = el("hidden-wrap");
 const hiddenCheck = el("hidden-roll");
 const clearBtn = el("clear-log");
 const gmPanel = el("gm-panel");
-const partyPanel = el("party-panel");
-const partyListEl = el("party-list");
 
 // -------------------------------------------------------------
 // Shared state
@@ -396,9 +393,10 @@ function applyRole() {
 // code. The extension does not read that code and should not start now, so the GM
 // does not reach into characters here — it increments a counter and each sheet
 // reconciles itself against it when it opens.
-//
-// v0.9.0: EPOCH_LABELS moved to dnm.js. The party panel names the same boundaries
-// when it reports what a character is waiting on, and two copies would drift.
+const EPOCH_LABELS = {
+  breather: "Breather", break: "Break", bed: "Bed",
+  scene: "End Scene", session: "New Session", adventure: "New Adventure",
+};
 
 async function pushEpoch(boundary) {
   if (role !== "GM" || !EPOCH_KEYS.includes(boundary)) return;
@@ -460,153 +458,6 @@ function wireGmPanel() {
 }
 
 // -------------------------------------------------------------
-// Party panel (0.9.0)
-// -------------------------------------------------------------
-// The table controls above push a boundary and say nothing about who received it.
-// The GM presses Bed and then has no way to tell, short of reading the log, whether
-// a given player's sheet has caught up. Worse is the player's side of it: someone
-// who cannot tell "already applied" from "hasn't reached me" rests again.
-//
-// This reads every token in the scene carrying a character and reports three things
-// per character: name, Spirit, and where they stand against the room's epochs.
-//
-// WHY THIS IS ALLOWED TO READ CHARACTERS:
-// The rule that matters is narrower than "the extension never interprets character
-// data". The background page never does — it relays events and writes metadata, and
-// stays ignorant of the DM1 format. The sheet is the only thing that WRITES a
-// character. The roller may READ one, and has since v1.12: refreshSelection() below
-// already parses the selected token this way. This is the same read, widened from
-// one token to all of them.
-//
-// Everything needed is already on the wire. Name and Spirit maximum come from the
-// SN snapshot; current Spirit and appliedEpochs come from the CP payload, which is
-// where the creator deliberately keeps live session values so an Owlbear round trip
-// stays lossless. No creator change, no snapshot change, no share-code risk.
-
-// Parsing is the expensive part — base64 decode plus two JSON.parse per token — and
-// scene.items.onChange fires on every drag frame. So the panel keeps two guards:
-//
-//   1. A parse cache keyed on the code string. A token that moved but did not have
-//      its character edited is a cache hit.
-//   2. A render signature. If no code and no epoch changed, the DOM is left alone.
-//      Dragging a token across the map changes neither, so it costs one string
-//      comparison and stops.
-const partyCache = new Map(); // code string -> { name, spirit, spiritMax }
-let partySignature = null;
-
-function readPartyMember(code) {
-  const hit = partyCache.get(code);
-  if (hit) return hit;
-  const r = parseCode(code);
-  if (r.error) return null;
-  const member = {
-    name: r.snap?.name || "Unnamed",
-    spirit: typeof r.char?.currentSpirit === "number" ? r.char.currentSpirit : null,
-    spiritMax: r.snap?.spiritMax ?? null,
-    char: r.char,
-  };
-  // Bounded so a long session of edits cannot grow this without limit. Every edit
-  // writes a new code, so without a cap this is one entry per keystroke-save.
-  if (partyCache.size > 60) partyCache.clear();
-  partyCache.set(code, member);
-  return member;
-}
-
-function partyRow(member, status) {
-  const li = document.createElement("li");
-  li.className = "party-row";
-
-  const head = document.createElement("div");
-  head.className = "party-head";
-
-  const name = document.createElement("span");
-  name.className = "party-name";
-  name.textContent = member.name;
-  head.append(name);
-
-  const spirit = document.createElement("span");
-  spirit.className = "party-spirit";
-  spirit.textContent = member.spirit == null
-    ? "Spirit ?"
-    : `Spirit ${member.spirit}/${member.spiritMax ?? "?"}`;
-  head.append(spirit);
-
-  // Three states, not two. "Not synced" is a character that has never met this room
-  // — newly built, or attached to a token for the first time. It is not behind and
-  // must not read as behind: there is nothing for it to catch up on, and the creator
-  // will adopt the room's position silently the first time its sheet opens.
-  const badge = document.createElement("span");
-  const labels = { current: "Caught up", behind: "Behind", unsynced: "Not synced" };
-  const classes = { current: "is-current", behind: "is-behind", unsynced: "is-unsynced" };
-  badge.className = `party-status ${classes[status.state]}`;
-  badge.textContent = labels[status.state];
-  badge.title = status.state === "unsynced"
-    ? "Never synchronised to this room. Nothing to catch up on."
-    : status.state === "behind"
-      ? "Has not yet applied a boundary the table has passed."
-      : "Level with the room.";
-  head.append(badge);
-
-  li.append(head);
-
-  if (status.state === "behind" && status.pending.length) {
-    const detail = document.createElement("div");
-    detail.className = "party-detail";
-    detail.textContent = `Waiting on ${status.pending.map((k) => EPOCH_LABELS[k] || k).join(", ")}`;
-    li.append(detail);
-  }
-
-  return li;
-}
-
-function renderParty(members) {
-  partyListEl.innerHTML = "";
-  if (!members.length) {
-    const li = document.createElement("li");
-    li.className = "party-empty";
-    li.textContent = "No characters attached to tokens in this scene.";
-    partyListEl.append(li);
-    return;
-  }
-  const roomEpochs = readEpochs(state);
-  for (const member of members) {
-    partyListEl.append(partyRow(member, epochStatus(member.char, roomEpochs)));
-  }
-}
-
-// items is optional: scene.items.onChange hands us the full list already, so passing
-// it through avoids a round trip. Without it we fetch, which is the path used on
-// open and whenever room metadata changes underneath us.
-async function refreshParty(items) {
-  if (role !== "GM" || standalone) return;
-  let codes = [];
-  try {
-    const all = items || (await OBR.scene.items.getItems());
-    codes = all
-      .map((i) => i.metadata?.[CHAR_KEY]?.code)
-      .filter((c) => typeof c === "string" && c);
-  } catch {
-    // No scene open, or the read raced a scene change. Leave whatever is on screen
-    // rather than blanking the panel on a transient failure.
-    return;
-  }
-
-  const roomEpochs = readEpochs(state);
-  const signature = JSON.stringify([codes, roomEpochs]);
-  if (signature === partySignature) return;
-  partySignature = signature;
-
-  const members = codes.map(readPartyMember).filter(Boolean);
-  members.sort((a, b) => a.name.localeCompare(b.name));
-  renderParty(members);
-}
-
-function applyPartyVisibility() {
-  if (!partyPanel) return;
-  partyPanel.hidden = role !== "GM" || standalone;
-}
-
-// -------------------------------------------------------------
 // Start
 // -------------------------------------------------------------
 async function startInOwlbear() {
@@ -619,40 +470,14 @@ async function startInOwlbear() {
   await load();
   render();
 
-  // v0.9.0 fix: the selection was only ever read inside player.onChange, so opening
-  // the popover with a token already selected showed no character until you clicked
-  // something else. Reading once at startup is the whole fix.
-  await refreshSelection();
-
-  applyPartyVisibility();
-  refreshParty();
-
   // onChange fires when the selection changes, which is how the popover
   // learns which character you are pointing at.
   OBR.player.onChange((player) => {
     role = player.role;
     playerName = player.name || playerName;
     applyRole();
-    applyPartyVisibility();
     refreshSelection();
-    // A promotion to GM is the moment the panel first has anything to show, and the
-    // signature guard would otherwise suppress the first render for a role that has
-    // just changed. Clearing it forces one pass.
-    partySignature = null;
-    refreshParty();
     render();
-  });
-
-  // Fires on every item change including drags. refreshParty() is signature-guarded
-  // precisely because of this: a move changes no code and no epoch, so it costs a
-  // string comparison and returns.
-  OBR.scene.items.onChange((items) => refreshParty(items));
-
-  // A scene change swaps the whole item set out. The cache is keyed on code strings
-  // rather than scene, so it stays valid, but the signature must not survive.
-  OBR.scene.onReadyChange((sceneReady) => {
-    partySignature = null;
-    if (sceneReady) refreshParty();
   });
 
   // Optimistic local view. Roll entries carry an id and applyEvent
@@ -668,9 +493,6 @@ async function startInOwlbear() {
     const found = meta[KEY];
     state = found ? { ...structuredClone(EMPTY_STATE), ...found } : structuredClone(EMPTY_STATE);
     render();
-    // The room's epochs are half of every party row's verdict, so a boundary press
-    // moves every character from caught up to behind at once.
-    refreshParty();
   });
 }
 

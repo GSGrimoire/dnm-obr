@@ -31,50 +31,6 @@ export function emptyEpochs() {
 export function readEpochs(state) {
   return { ...emptyEpochs(), ...(state?.epochs || {}) };
 }
-
-// Display names for the boundaries. Lived in roller.js until 0.9.0; moved here
-// because the party panel names the same boundaries when it says what a character
-// is waiting on, and two copies would drift the first time one is renamed.
-export const EPOCH_LABELS = {
-  breather: "Breather", break: "Break", bed: "Bed",
-  scene: "End Scene", session: "New Session", adventure: "New Adventure",
-};
-
-// -------------------------------------------------------------
-// Party status (0.9.0)
-// -------------------------------------------------------------
-// The character's half of the epoch bargain, read from the CP payload. This
-// deliberately MIRRORS readAppliedEpochs() in the creator rather than reimplementing
-// it: same six keys, same coercion, same "missing means null, not zero".
-//
-// The distinction that matters is null vs all-zeros. A character with no
-// appliedEpochs has never met this room. The creator's catchUpToRoomEpochs() adopts
-// the room's position for it and applies nothing, on purpose — otherwise every newly
-// built character would arrive and immediately run a rest it was never present for.
-// Reading that as zeros would report it as behind by however many boundaries the
-// table has been through, and send the GM chasing a player with nothing to catch up
-// on. That is the opposite of what this panel is for.
-export function readAppliedEpochs(char) {
-  const stored = char?.appliedEpochs;
-  if (!stored || typeof stored !== "object") return null;
-  return EPOCH_KEYS.reduce((acc, k) => {
-    acc[k] = Math.max(0, Math.round(Number(stored[k]) || 0));
-    return acc;
-  }, {});
-}
-
-// Returns { state: "unsynced" | "behind" | "current", pending: [boundaryKey] }.
-//
-// Applied ahead of the room is treated as current, not as an error. It happens
-// legitimately when room metadata is cleared or a room is rebuilt, and the creator's
-// own comparison is `room > applied` for the same reason.
-export function epochStatus(char, roomEpochs) {
-  const applied = readAppliedEpochs(char);
-  if (!applied) return { state: "unsynced", pending: [] };
-  const room = { ...emptyEpochs(), ...(roomEpochs || {}) };
-  const pending = EPOCH_KEYS.filter((k) => (Number(room[k]) || 0) > applied[k]);
-  return { state: pending.length ? "behind" : "current", pending };
-}
 export const MAX_LOG_ENTRIES = 40;
 export const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
 
