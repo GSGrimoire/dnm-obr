@@ -16,7 +16,7 @@
 // confirmed working in play. Nothing should reintroduce a local sheet page.
 // =============================================================
 
-import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
+import OBR from "./sdk.js";
 import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
@@ -106,14 +106,81 @@ function persist(ev) {
   return writeChain;
 }
 
+// -------------------------------------------------------------
+// Who is allowed to ask for what (0.9.1)
+// -------------------------------------------------------------
+// Three event types move state the interface reserves for the GM: a boundary or rest
+// pushed to the whole table, clearing the shared log, and Threat.
+//
+// Each sender already checks the role before broadcasting — `pushEpoch()`,
+// `clearLog()` and `stepPool()` all do. None of those checks is a control. They run
+// in the sender's own tab, on code the sender can edit or simply bypass by calling
+// OBR.broadcast directly from the console, and the channel is open to every client
+// in the room by design. The checks stop accidents, which is worth having, and stop
+// nothing else.
+//
+// This page is the only writer of room metadata, which makes it the only place a
+// real check can live. What made the gap matter is the epoch mechanism: a forged
+// `bed` reaches EVERY attached character, applies to players who were not even
+// online, and has no undo. A forged `clear` destroys the shared log permanently.
+//
+// The sender-side checks stay where they are. This is the one that counts.
+const GM_ONLY_TYPES = new Set(["epoch", "clear"]);
+
+function isGmOnly(ev) {
+  if (!ev || typeof ev !== "object") return false;
+  if (GM_ONLY_TYPES.has(ev.type)) return true;
+  // Anyone may move Momentum — it is the group's pool. Threat is the GM's.
+  return ev.type === "pool" && ev.pool === "threat";
+}
+
+// Connection ids, not player ids: a broadcast identifies its sender by connection.
+let gmConnections = new Set();
+
+async function refreshGmConnections() {
+  try {
+    const [players, self] = await Promise.all([
+      OBR.party.getPlayers(),
+      OBR.player.getConnectionId(),
+    ]);
+    const next = new Set(
+      players.filter((p) => p.role === "GM").map((p) => p.connectionId),
+    );
+    // getPlayers() lists everyone else in the room, never this client. This page only
+    // relays while this client is the GM, so its own connection belongs in the set —
+    // without it the GM's own presses would be the first thing refused.
+    if (self) next.add(self);
+    gmConnections = next;
+  } catch (err) {
+    // Deliberately keeps the previous set rather than clearing it. Clearing on a
+    // transient failure would refuse the GM's own controls until the next party
+    // change, which reads at the table as the buttons having stopped working.
+    console.error("[dnm] could not read the party; keeping the last known GMs", err);
+  }
+}
+
 // player.onChange fires on any player change, including selection, so the
 // subscription is guarded rather than re-registered each time.
 let unsubscribeRelay = null;
 
-function setRelay(role) {
+function relay(event) {
+  if (isGmOnly(event.data) && !gmConnections.has(event.connectionId)) {
+    console.warn(
+      "[dnm] refused a GM-only event from a non-GM connection:",
+      event.data && event.data.type,
+    );
+    return;
+  }
+  persist(event.data);
+}
+
+async function setRelay(role) {
   const shouldRelay = role === "GM";
   if (shouldRelay && !unsubscribeRelay) {
-    unsubscribeRelay = OBR.broadcast.onMessage(CHANNEL, (event) => persist(event.data));
+    // Populated BEFORE subscribing. An empty set refuses everything privileged,
+    // which is the safe direction to fail, but it would also refuse the GM.
+    await refreshGmConnections();
+    unsubscribeRelay = OBR.broadcast.onMessage(CHANNEL, relay);
   } else if (!shouldRelay && unsubscribeRelay) {
     unsubscribeRelay();
     unsubscribeRelay = null;
@@ -122,7 +189,9 @@ function setRelay(role) {
 
 OBR.onReady(async () => {
   setupContextMenu();
-  setRelay(await OBR.player.getRole());
+  await setRelay(await OBR.player.getRole());
   // The role can change mid-session if the room owner promotes someone.
-  OBR.player.onChange((player) => setRelay(player.role));
+  OBR.player.onChange((player) => { setRelay(player.role); });
+  // And the set of GMs changes when anyone joins, leaves, or is promoted.
+  OBR.party.onChange(() => { refreshGmConnections(); });
 });

@@ -23,8 +23,11 @@ Upload all files to the root of it:
 manifest.json      background.html    icon.svg
 index.html         background.js      icon-attach.svg
 roller.js          dnm.js             icon-sheet.svg
-style.css
+style.css          sdk.js
 ```
+
+`sdk.js` is the vendored Owlbear SDK, added in 0.9.1. It is committed rather than
+built — see **Third-party code** below for why it is not fetched at runtime.
 
 `sheet.html`, `sheet.js`, `sheet.css`, `rules.js` and `build-rules.mjs` were the
 duplicate-sheet approach and were **deleted at 0.7.0**, when the modal switched to
@@ -87,11 +90,31 @@ trims itself to the most recent 40 entries and then trims further by size if nee
 open panel for that session, so a player cannot dig them out of devtools. The tradeoff is
 that closing the panel discards them.
 
-**Permissions**: only the GM sees the Hidden toggle and the Clear button, and only the GM
-can change Threat. Anyone can change Momentum. This is enforced in the panel, not on a
-server, so it is a convenience rather than a security boundary. That is the right call
-here because nothing in a roll log is worth cheating over, but do not extend the same
-assumption to anything you actually want hidden.
+**Permissions**: only the GM sees the Hidden toggle, the Clear button and the table
+controls, and only the GM can change Threat. Anyone can change Momentum — it is the
+group's pool.
+
+Until 0.9.1 all of that was enforced only in the panel. This paragraph used to say that
+made it "a convenience rather than a security boundary", which was fair when the
+privileged actions were Hidden, Clear and Threat, and stopped being fair in 0.8.0 when
+table controls arrived. A panel check runs in the sender's own tab, and `OBR.broadcast`
+is open to every client in the room by design, so a player never had to defeat the
+check — they could call `OBR.broadcast.sendMessage` directly and skip the function
+holding it. A forged rest reaches every attached character, including players who are
+offline, and cannot be undone.
+
+Since **0.9.1** the GM's background page — the only writer of room metadata — checks
+the sender's connection id against the room's GMs before applying an `epoch`, a
+`clear`, or a Threat change. The panel checks remain, because they stop accidents, but
+they are no longer the only thing standing there.
+
+Still deliberately open: a client can post a roll or an action entry under any name.
+The log is a shared record, not evidence.
+
+**Third-party code**: the Owlbear SDK is vendored as `sdk.js` rather than imported from
+esm.sh at runtime. An ES module import cannot carry an integrity hash, so anything that
+host served would have run in the room with full access to every character at the
+table. The character creator has bundled its own copy since v1.14 for the same reason.
 
 **Concurrency**: two people rolling at the exact same instant can have one overwrite the
 other. At a five-person table this is rare enough to ignore.

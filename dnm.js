@@ -79,6 +79,93 @@ export const MAX_LOG_ENTRIES = 40;
 export const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
 
 // -------------------------------------------------------------
+// Event sanitising (0.9.1)
+// -------------------------------------------------------------
+// Every sender in this codebase already clamps these fields before broadcasting.
+// That is not worth anything on its own: OBR.broadcast is open to every client in
+// the room, so the clamp runs in a tab the sender controls and can simply not run.
+// Until now the reducer took whatever arrived and put it straight in the log.
+//
+// Two things went wrong with an oversized entry, and neither needed malice — a bug
+// in a future sender would do it just as well:
+//
+//   1. `trimState()` drops log entries until the state fits, but it stops at one
+//      entry. A single entry larger than the budget therefore survives and the write
+//      exceeds the room's 16 kB, which is shared with every other extension in the
+//      room, not just this one.
+//   2. `renderRollEntry()` builds one DOM node per die. An entry claiming a hundred
+//      thousand dice freezes every client that renders the log, including the GM's.
+//
+// So the limits are enforced HERE, in the reducer both sides run, rather than at each
+// call site. A sender that forgets to clamp is now harmless, and so is one that never
+// intended to clamp at all.
+export const FIELD_LIMITS = { who: 24, label: 48, detail: 80, id: 40, dice: 20 };
+
+const DIE_KINDS = new Set(["crit", "success", "complication", "fail"]);
+
+function cleanText(value, max) {
+  return String(value == null ? "" : value).slice(0, max);
+}
+
+function cleanCount(value) {
+  const n = Math.round(Number(value) || 0);
+  return Number.isFinite(n) ? Math.max(0, Math.min(999, n)) : 0;
+}
+
+// Returns a normalised entry, or null when there is not enough here to log.
+// Entries already sitting in a live room were written by clamped senders, so running
+// them through this is idempotent and nothing in an existing log changes shape.
+export function sanitizeEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const id = cleanText(entry.id, FIELD_LIMITS.id);
+  if (!id) return null;
+
+  const t = Number(entry.t);
+  const base = {
+    id,
+    t: Number.isFinite(t) ? t : Date.now(),
+    who: cleanText(entry.who, FIELD_LIMITS.who),
+    label: cleanText(entry.label, FIELD_LIMITS.label),
+  };
+
+  if (entry.kind === "action") {
+    const pool = entry.pool === "momentum" || entry.pool === "threat" ? entry.pool : null;
+    const delta = Math.round(Number(entry.delta) || 0);
+    return {
+      ...base,
+      kind: "action",
+      detail: cleanText(entry.detail, FIELD_LIMITS.detail),
+      pool,
+      // Clamped rather than dropped: a delta is display only here, the pool itself
+      // moves through the "pool" event, so a silly number misinforms rather than
+      // miscounts. It still must not be unbounded text in the metadata.
+      delta: Math.max(-999, Math.min(999, delta)),
+    };
+  }
+
+  // A roll entry. `detail` is the dice, and it is the field that has to be bounded
+  // hardest — it is the only one the renderer loops over.
+  const detail = Array.isArray(entry.detail) ? entry.detail : [];
+  return {
+    ...base,
+    detail: detail.slice(0, FIELD_LIMITS.dice).map((d) => ({
+      d: cleanCount(d && d.d),
+      kind: DIE_KINDS.has(d && d.kind) ? d.kind : "fail",
+    })),
+    an: cleanText(entry.an, FIELD_LIMITS.label),
+    av: cleanCount(entry.av),
+    sn: cleanText(entry.sn, FIELD_LIMITS.label),
+    sv: cleanCount(entry.sv),
+    diff: cleanCount(entry.diff),
+    succ: cleanCount(entry.succ),
+    comp: cleanCount(entry.comp),
+    pass: !!entry.pass,
+    gain: cleanCount(entry.gain),
+    hidden: !!entry.hidden,
+  };
+}
+
+// -------------------------------------------------------------
 // Shared event reducer
 // -------------------------------------------------------------
 // Rolls and pool changes travel as broadcast events rather than each client
@@ -101,8 +188,10 @@ export function applyEvent(state, ev) {
   next.log = Array.isArray(next.log) ? next.log.slice() : [];
 
   if (ev?.type === "roll" && ev.entry) {
-    if (next.log.some((e) => e.id === ev.entry.id)) return next;
-    next.log.unshift(ev.entry);
+    const entry = sanitizeEntry(ev.entry);
+    if (!entry) return next;
+    if (next.log.some((e) => e.id === entry.id)) return next;
+    next.log.unshift(entry);
     next.log = next.log.slice(0, MAX_LOG_ENTRIES);
   } else if (ev?.type === "action" && ev.entry) {
     // v1.17. Actions share the log with rolls: same dedupe by id, same cap, same
@@ -114,8 +203,10 @@ export function applyEvent(state, ev) {
     // including the ones already sitting in a live room's metadata from before
     // v1.17, which is why consumers must treat a missing kind as a roll rather
     // than requiring the field.
-    if (next.log.some((e) => e.id === ev.entry.id)) return next;
-    next.log.unshift(ev.entry);
+    const entry = sanitizeEntry(ev.entry);
+    if (!entry) return next;
+    if (next.log.some((e) => e.id === entry.id)) return next;
+    next.log.unshift(entry);
     next.log = next.log.slice(0, MAX_LOG_ENTRIES);
   } else if (ev?.type === "epoch" && EPOCH_KEYS.includes(ev.boundary)) {
     // v0.8.0. The GM pushes a boundary to the whole table by incrementing a counter
@@ -134,12 +225,17 @@ export function applyEvent(state, ev) {
     epochs[ev.boundary] = epochs[ev.boundary] + 1;
     next.epochs = epochs;
     // The press is logged like any other action so the table sees who called the rest.
-    if (ev.entry && !next.log.some((e) => e.id === ev.entry.id)) {
-      next.log.unshift(ev.entry);
+    const entry = sanitizeEntry(ev.entry);
+    if (entry && !next.log.some((e) => e.id === entry.id)) {
+      next.log.unshift(entry);
       next.log = next.log.slice(0, MAX_LOG_ENTRIES);
     }
   } else if (ev?.type === "pool" && (ev.pool === "momentum" || ev.pool === "threat")) {
-    next[ev.pool] = Math.max(0, (next[ev.pool] || 0) + (ev.delta || 0));
+    // Bounded per event. Unbounded, one forged delta sets a pool to Number.MAX_VALUE
+    // and every subsequent arithmetic on it is meaningless until the room is rebuilt.
+    const delta = Math.round(Number(ev.delta) || 0);
+    const bounded = Math.max(-999, Math.min(999, delta));
+    next[ev.pool] = Math.max(0, Math.min(9999, (next[ev.pool] || 0) + bounded));
   } else if (ev?.type === "clear") {
     next.log = [];
   }

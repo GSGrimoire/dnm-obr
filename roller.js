@@ -19,7 +19,7 @@
 // it out of devtools. It lives only in the GM's open panel for the session.
 // =============================================================
 
-import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
+import OBR from "./sdk.js";
 import {
   ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
