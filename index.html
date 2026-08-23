@@ -32,6 +32,48 @@
     </div>
   </section>
 
+  <!-- GM only. Hidden entirely for players by roller.js, not merely disabled: these
+       push a boundary to every character at the table, and it should not look like
+       something a player might be allowed to press. -->
+  <section id="gm-panel" class="gm-panel" hidden>
+    <div class="gm-panel-head">
+      <h2>Table Controls</h2>
+      <span class="gm-badge">GM</span>
+    </div>
+    <div class="gm-group">
+      <span class="gm-group-label">Rest</span>
+      <div class="gm-buttons">
+        <button class="gm-btn" data-epoch="breather">Breather</button>
+        <button class="gm-btn" data-epoch="break">Break</button>
+        <button class="gm-btn" data-epoch="bed">Bed</button>
+      </div>
+    </div>
+    <div class="gm-group">
+      <span class="gm-group-label">Boundary</span>
+      <div class="gm-buttons">
+        <button class="gm-btn" data-epoch="scene">End Scene</button>
+        <button class="gm-btn" data-epoch="session">New Session</button>
+        <button class="gm-btn" data-epoch="adventure">New Adventure</button>
+      </div>
+    </div>
+    <p class="gm-note">Applies to every attached character. A sheet that is closed
+      catches up the next time it is opened.</p>
+  </section>
+
+  <!-- GM only, 0.9.0. Answers the question the buttons above leave open: you pressed
+       Bed, but who actually got it? Reads every token in the scene carrying a
+       character and reports where each one stands. -->
+  <section id="party-panel" class="party-panel" hidden>
+    <div class="gm-panel-head">
+      <h2>Party</h2>
+      <span class="gm-badge">GM</span>
+    </div>
+    <ol id="party-list" class="party-list"></ol>
+    <p class="gm-note" id="party-note">A character catches up when its sheet is next
+      opened. Not synced means the character has never met this room and has nothing
+      to catch up on.</p>
+  </section>
+
   <section class="roller">
     <div id="char-banner" class="char-banner" hidden></div>
     <div class="grid-2">
@@ -107,52 +149,20 @@
     </div>
   </section>
 
-  <!-- GM only. Hidden entirely for players by roller.js, not merely disabled: these
-       push a boundary to every character at the table, and it should not look like
-       something a player might be allowed to press. -->
-  <section id="gm-panel" class="gm-panel" hidden>
-    <div class="gm-panel-head">
-      <h2>Table Controls</h2>
-      <span class="gm-badge">GM</span>
-    </div>
-    <div class="gm-group">
-      <span class="gm-group-label">Rest</span>
-      <div class="gm-buttons">
-        <button class="gm-btn" data-epoch="breather">Breather</button>
-        <button class="gm-btn" data-epoch="break">Break</button>
-        <button class="gm-btn" data-epoch="bed">Bed</button>
-      </div>
-    </div>
-    <div class="gm-group">
-      <span class="gm-group-label">Boundary</span>
-      <div class="gm-buttons">
-        <button class="gm-btn" data-epoch="scene">End Scene</button>
-        <button class="gm-btn" data-epoch="session">New Session</button>
-        <button class="gm-btn" data-epoch="adventure">New Adventure</button>
-      </div>
-    </div>
-    <p class="gm-note">Applies to every attached character. A sheet that is closed
-      catches up the next time it is opened.</p>
-  </section>
-
-  <!-- GM only, 0.9.0. Answers the question the buttons above leave open: you pressed
-       Bed, but who actually got it? Reads every token in the scene carrying a
-       character and reports where each one stands. -->
-  <section id="party-panel" class="party-panel" hidden>
-    <div class="gm-panel-head">
-      <h2>Party</h2>
-      <span class="gm-badge">GM</span>
-    </div>
-    <ol id="party-list" class="party-list"></ol>
-    <p class="gm-note" id="party-note">A character catches up when its sheet is next
-      opened. Not synced means the character has never met this room and has nothing
-      to catch up on.</p>
-  </section>
-
   <section class="log-section">
     <div class="log-header">
       <h2>Rolls and Actions</h2>
-      <button id="clear-log" class="ghost" hidden>Clear</button>
+      <div class="log-header-actions">
+        <!-- 0.9.2. Owlbear gives the popover a fixed height from the manifest and no
+             drag handle, so this is the resize control. The chosen height is
+             remembered per browser. -->
+        <div class="height-control" title="Panel height">
+          <button id="shorter" class="ghost icon-btn" aria-label="Make the panel shorter">&minus;</button>
+          <span id="height-value" class="height-value">900</span>
+          <button id="taller" class="ghost icon-btn" aria-label="Make the panel taller">+</button>
+        </div>
+        <button id="clear-log" class="ghost" hidden>Clear</button>
+      </div>
     </div>
     <ol id="log" class="log"></ol>
   </section>

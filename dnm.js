@@ -166,6 +166,32 @@ export function sanitizeEntry(entry) {
 }
 
 // -------------------------------------------------------------
+// Which events require the GM (0.9.2)
+// -------------------------------------------------------------
+// Enforced in background.js, which is the only writer of room metadata and therefore
+// the only place a check counts. It lives HERE so it can be tested without a live
+// room, and so there is one statement of the rule rather than one per caller.
+//
+// 0.9.1 made every Threat change GM-only. That was wrong about the game and broke
+// real play. Adding Threat is something PLAYERS do: Nanobarrier charges it,
+// Adrenaline Rush pays in it, and several items add it on use, all routed through the
+// creator's addThreat(). Blocking those meant a Sentinel could press Barrier, watch
+// the cost announce itself in the log, and see the pool never move.
+//
+// The creator's own tooltip had it right all along — "Anyone can add; only the GM
+// should spend" — so what is privileged is the DIRECTION, not the pool. A player can
+// pay Threat in and cannot drain it.
+const GM_ONLY_TYPES = new Set(["epoch", "clear"]);
+
+export function isGmOnlyEvent(ev) {
+  if (!ev || typeof ev !== "object") return false;
+  if (GM_ONLY_TYPES.has(ev.type)) return true;
+  // Momentum is the group's pool and stays open to everyone, both directions.
+  if (ev.type !== "pool" || ev.pool !== "threat") return false;
+  return (Math.round(Number(ev.delta) || 0)) < 0;
+}
+
+// -------------------------------------------------------------
 // Shared event reducer
 // -------------------------------------------------------------
 // Rolls and pool changes travel as broadcast events rather than each client
@@ -292,8 +318,30 @@ export function parseCode(code) {
   const parts = trimmed.split("-");
   if (parts[0] !== "DM1") return { error: "That does not look like a Dreams & Machines code." };
 
-  const cpIndex = parts.findIndex((p) => p.startsWith("CP"));
-  const snIndex = parts.findIndex((p) => p.startsWith("SN"));
+  // Searched from the END, and that is not a style preference (0.9.2).
+  //
+  // A code is a mix of two segment kinds. Most carry a two-letter TAG plus a payload
+  // — CP, SN, NM, GW — but segments 1 to 3 are bare lookup codes with no tag at all:
+  // the origin, the archetype and the temperament, written straight in as `EVR`,
+  // `SNT`, `CRC`.
+  //
+  // Sentinel's archetype code is **SNT**. Searching from the front, `startsWith("SN")`
+  // matched the archetype at index 2 rather than the snapshot at the end, so the
+  // parser tried to read one character of archetype code as the snapshot JSON, threw,
+  // and reported the whole code as damaged. Every Sentinel was therefore invisible to
+  // the party panel and to the roller's selected-character banner, while importing
+  // into the creator worked — the creator has its own parser and never looks for SN.
+  //
+  // Searching backwards fixes it for the same reason in every future case: the tagged
+  // segments are appended after the positional ones, so the last match is always the
+  // real one. A new archetype coded `CPX` would break the front search too, and cannot
+  // break this one.
+  const findLast = (prefix) => {
+    for (let i = parts.length - 1; i >= 0; i--) if (parts[i].startsWith(prefix)) return i;
+    return -1;
+  };
+  const cpIndex = findLast("CP");
+  const snIndex = findLast("SN");
   if (cpIndex < 0) return { error: "This code has no character payload." };
   if (snIndex < 0) {
     return { error: "This code was made before Owlbear support was added. Re-export it from the character creator (version 1.11 or newer)." };

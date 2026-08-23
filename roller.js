@@ -21,7 +21,7 @@
 
 import OBR from "./sdk.js";
 import {
-  ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
+  ID, ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
   readEpochs, epochStatus,
 } from "./dnm.js";
@@ -119,6 +119,7 @@ async function doRoll() {
     // Never announced, so it cannot be read from the network by a player.
     hiddenLog.unshift({ ...entry, hidden: true });
     hiddenLog = hiddenLog.slice(0, MAX_LOG_ENTRIES);
+    saveHiddenLog();
     render();
     setStatus("Hidden roll. Only you can see this one.");
     return;
@@ -159,10 +160,50 @@ async function stepPool(pool, delta) {
   });
 }
 
+// -------------------------------------------------------------
+// Hidden rolls (0.9.2: persisted)
+// -------------------------------------------------------------
+// A hidden roll is still never broadcast and never written to room metadata — that
+// is the whole property, and it is unchanged. What changed is where the GM's own
+// copy lives.
+//
+// It used to be a plain array, so closing the popover threw the lot away. From the
+// GM's seat that reads as hidden rolls behaving inconsistently: three are listed,
+// the panel is closed to look at the map, and on reopening they are gone with no
+// sign they ever existed.
+//
+// localStorage is the right home. It is this browser only, so it never reaches a
+// player, and it does not consume the room's shared 16 kB. Every access is wrapped:
+// private windows and blocked site data throw on the accessor itself.
+const HIDDEN_KEY = "dnm-obr/hidden-log";
+
+function loadHiddenLog() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    // Marked hidden on the way back in regardless of what was stored, so a mangled
+    // record can never render as an ordinary roll the GM believes the table saw.
+    return raw.slice(0, MAX_LOG_ENTRIES).map((e) => ({ ...e, hidden: true }));
+  } catch {
+    return [];
+  }
+}
+
+function saveHiddenLog() {
+  try {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify(hiddenLog.slice(0, MAX_LOG_ENTRIES)));
+  } catch (err) {
+    // Not fatal: the roll is already in memory and on screen. It just will not
+    // survive the panel closing, which is exactly the old behaviour.
+    console.warn("[dnm] could not persist the hidden log", err);
+  }
+}
+
 async function clearLog() {
   if (role !== "GM") return;
   await announce({ type: "clear" });
   hiddenLog = [];
+  saveHiddenLog();
   setStatus("Log cleared.");
 }
 
@@ -308,8 +349,19 @@ function renderRollEntry(e) {
   const head = document.createElement("div");
   head.className = "entry-head";
   const who = document.createElement("strong");
-  who.textContent = e.hidden ? `${e.who} (hidden)` : e.who;
+  who.textContent = e.who;
   head.append(who);
+  // 0.9.2: a badge rather than "(hidden)" tacked onto the name. Reported from play as
+  // hidden rolls "not consistently" reading as hidden — the word was there, in the
+  // same weight and colour as the character's name, at the end of a line the eye
+  // reads as an ordinary entry. Whether a roll reached the table is not a detail.
+  if (e.hidden) {
+    const tag = document.createElement("span");
+    tag.className = "entry-hidden-tag";
+    tag.textContent = "Hidden";
+    tag.title = "Not sent to the table. Only you can see this roll.";
+    head.append(tag);
+  }
   if (e.label) {
     const lab = document.createElement("span");
     lab.className = "entry-label";
@@ -547,6 +599,19 @@ function partyRow(member, status) {
       : "Level with the room.";
   head.append(badge);
 
+  // 0.9.2. Opens this character's sheet from the row. The GM otherwise has to find
+  // the token on the map, right-click it and pick the menu item — and the party panel
+  // is exactly where you are standing when you decide you need to look at someone.
+  if (member.itemId) {
+    const open = document.createElement("button");
+    open.className = "ghost party-open";
+    open.type = "button";
+    open.textContent = "Sheet";
+    open.title = `Open ${member.name}'s sheet`;
+    open.addEventListener("click", () => openSheetFor(member.itemId));
+    head.append(open);
+  }
+
   li.append(head);
 
   if (status.state === "behind" && status.pending.length) {
@@ -557,6 +622,25 @@ function partyRow(member, status) {
   }
 
   return li;
+}
+
+// Deliberately the same modal id and URL shape the context menu uses in
+// background.js. Opening under a second id would let a token's sheet be open twice
+// at once, in two windows, both saving to the same token.
+const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/";
+
+async function openSheetFor(itemId) {
+  try {
+    await OBR.modal.open({
+      id: `${ID}/sheet-modal`,
+      url: `${SHEET_URL}?item=${encodeURIComponent(itemId)}`,
+      width: 1280,
+      height: 940,
+    });
+  } catch (err) {
+    setStatus("Could not open that sheet.");
+    console.error("[dnm] modal open failed", err);
+  }
 }
 
 function renderParty(members) {
@@ -579,12 +663,15 @@ function renderParty(members) {
 // open and whenever room metadata changes underneath us.
 async function refreshParty(items) {
   if (role !== "GM" || standalone) return;
-  let codes = [];
+  // 0.9.2: the token id travels with the code now, so a row can open that token's
+  // sheet. It is also part of the signature, so dragging a NEW character into the
+  // scene still redraws even if some other token carries an identical code.
+  let entries = [];
   try {
     const all = items || (await OBR.scene.items.getItems());
-    codes = all
-      .map((i) => i.metadata?.[CHAR_KEY]?.code)
-      .filter((c) => typeof c === "string" && c);
+    entries = all
+      .filter((i) => typeof i.metadata?.[CHAR_KEY]?.code === "string" && i.metadata[CHAR_KEY].code)
+      .map((i) => ({ id: i.id, code: i.metadata[CHAR_KEY].code }));
   } catch {
     // No scene open, or the read raced a scene change. Leave whatever is on screen
     // rather than blanking the panel on a transient failure.
@@ -592,11 +679,19 @@ async function refreshParty(items) {
   }
 
   const roomEpochs = readEpochs(state);
-  const signature = JSON.stringify([codes, roomEpochs]);
+  const signature = JSON.stringify([entries, roomEpochs]);
   if (signature === partySignature) return;
   partySignature = signature;
 
-  const members = codes.map(readPartyMember).filter(Boolean);
+  const members = entries
+    .map(({ id, code }) => {
+      const member = readPartyMember(code);
+      // Spread rather than mutate: readPartyMember() returns the CACHED object, and
+      // writing itemId onto it would pin the first token that happened to carry this
+      // code — wrong the moment two tokens share one character's code.
+      return member ? { ...member, itemId: id } : null;
+    })
+    .filter(Boolean);
   members.sort((a, b) => a.name.localeCompare(b.name));
   renderParty(members);
 }
@@ -611,6 +706,9 @@ function applyPartyVisibility() {
 // -------------------------------------------------------------
 async function startInOwlbear() {
   role = await OBR.player.getRole();
+  // Restored before the first render so the GM's own hidden rolls are on screen
+  // immediately rather than appearing after some later redraw.
+  if (role === "GM") hiddenLog = loadHiddenLog();
   playerName = (await OBR.player.getName()) || "Someone";
   if (!charEl.value) charEl.value = playerName;
   applyRole();
@@ -674,6 +772,58 @@ async function startInOwlbear() {
   });
 }
 
+// -------------------------------------------------------------
+// Panel height (0.9.2)
+// -------------------------------------------------------------
+// Owlbear sizes the popover from the manifest and offers the viewer no drag handle,
+// so with the log, the roller, the party panel and the table controls stacked in one
+// column the default was a long scroll. OBR.action.setHeight() is the only lever.
+//
+// Stored in localStorage rather than room metadata on purpose: this is one person's
+// window on their own screen, not shared table state, and room metadata is a scarce
+// 16 kB shared with every other extension.
+const HEIGHT_KEY = "dnm-obr/panel-height";
+const HEIGHT_MIN = 480;
+const HEIGHT_MAX = 1600;
+const HEIGHT_STEP = 120;
+const HEIGHT_DEFAULT = 900;
+
+function readStoredHeight() {
+  try {
+    const raw = Number(localStorage.getItem(HEIGHT_KEY));
+    if (Number.isFinite(raw) && raw >= HEIGHT_MIN && raw <= HEIGHT_MAX) return raw;
+  } catch {
+    // Private windows and blocked site data both throw. The default is fine.
+  }
+  return HEIGHT_DEFAULT;
+}
+
+let panelHeight = HEIGHT_DEFAULT;
+
+async function applyHeight(next, { persist = true } = {}) {
+  panelHeight = clamp(Math.round(next), HEIGHT_MIN, HEIGHT_MAX);
+  const label = el("height-value");
+  if (label) label.textContent = panelHeight;
+  const shorter = el("shorter");
+  const taller = el("taller");
+  if (shorter) shorter.disabled = panelHeight <= HEIGHT_MIN;
+  if (taller) taller.disabled = panelHeight >= HEIGHT_MAX;
+  if (persist) {
+    try { localStorage.setItem(HEIGHT_KEY, String(panelHeight)); } catch { /* see above */ }
+  }
+  if (standalone) return;
+  try {
+    await OBR.action.setHeight(panelHeight);
+  } catch (err) {
+    console.warn("[dnm] could not resize the panel", err);
+  }
+}
+
+function wireHeightControls() {
+  el("shorter")?.addEventListener("click", () => applyHeight(panelHeight - HEIGHT_STEP));
+  el("taller")?.addEventListener("click", () => applyHeight(panelHeight + HEIGHT_STEP));
+}
+
 function startStandalone() {
   // Opening index.html directly in a tab runs with local state only, so the
   // layout and the roll maths can be checked before installing anything.
@@ -687,6 +837,10 @@ function startStandalone() {
 }
 
 wireUI();
+wireHeightControls();
+// Applied without persisting: this is restoring what was already stored, and in
+// standalone it only updates the label.
+applyHeight(readStoredHeight(), { persist: false });
 
 if (OBR.isAvailable) {
   OBR.onReady(startInOwlbear);

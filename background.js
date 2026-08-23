@@ -17,7 +17,7 @@
 // =============================================================
 
 import OBR from "./sdk.js";
-import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState } from "./dnm.js";
+import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
 
@@ -125,14 +125,10 @@ function persist(ev) {
 // online, and has no undo. A forged `clear` destroys the shared log permanently.
 //
 // The sender-side checks stay where they are. This is the one that counts.
-const GM_ONLY_TYPES = new Set(["epoch", "clear"]);
-
-function isGmOnly(ev) {
-  if (!ev || typeof ev !== "object") return false;
-  if (GM_ONLY_TYPES.has(ev.type)) return true;
-  // Anyone may move Momentum — it is the group's pool. Threat is the GM's.
-  return ev.type === "pool" && ev.pool === "threat";
-}
+//
+// Which events those are is decided by isGmOnlyEvent() in dnm.js, so the rule can be
+// tested without a live room. 0.9.2 corrected it: Threat is GM-only downwards only,
+// because paying Threat IN is a player action the rules require.
 
 // Connection ids, not player ids: a broadcast identifies its sender by connection.
 let gmConnections = new Set();
@@ -164,7 +160,7 @@ async function refreshGmConnections() {
 let unsubscribeRelay = null;
 
 function relay(event) {
-  if (isGmOnly(event.data) && !gmConnections.has(event.connectionId)) {
+  if (isGmOnlyEvent(event.data) && !gmConnections.has(event.connectionId)) {
     console.warn(
       "[dnm] refused a GM-only event from a non-GM connection:",
       event.data && event.data.type,
