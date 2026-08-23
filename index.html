@@ -140,27 +140,31 @@
       </label>
     </div>
 
+    <!-- 0.9.3. Three modes, replacing the GM-only Hidden checkbox.
+         OPEN   — the table sees the roll and the result.
+         HIDDEN — the table sees THAT you rolled, and nothing else. Anyone may use
+                  it: a player concealing a result is ordinary play, and the table
+                  still knows a roll happened.
+         SECRET — nothing is sent at all, so no one can tell a roll occurred. GM
+                  only, deliberately: a player rolling with no trace is the one
+                  thing a shared log exists to prevent. -->
     <div class="roll-row">
-      <label class="hidden-toggle" id="hidden-wrap" hidden>
-        <input type="checkbox" id="hidden-roll">
-        <span>Hidden</span>
-      </label>
+      <div class="conceal" id="conceal-wrap">
+        <div class="segmented" id="conceal-seg">
+          <button data-conceal="open" class="on">Open</button>
+          <button data-conceal="hidden">Hidden</button>
+          <button data-conceal="secret" id="conceal-secret" hidden>Secret</button>
+        </div>
+      </div>
       <button id="roll-btn" class="primary">Roll</button>
     </div>
+    <p class="conceal-hint" id="conceal-hint"></p>
   </section>
 
   <section class="log-section">
     <div class="log-header">
       <h2>Rolls and Actions</h2>
       <div class="log-header-actions">
-        <!-- 0.9.2. Owlbear gives the popover a fixed height from the manifest and no
-             drag handle, so this is the resize control. The chosen height is
-             remembered per browser. -->
-        <div class="height-control" title="Panel height">
-          <button id="shorter" class="ghost icon-btn" aria-label="Make the panel shorter">&minus;</button>
-          <span id="height-value" class="height-value">900</span>
-          <button id="taller" class="ghost icon-btn" aria-label="Make the panel taller">+</button>
-        </div>
         <button id="clear-log" class="ghost" hidden>Clear</button>
       </div>
     </div>
@@ -168,6 +172,20 @@
   </section>
 
   <p id="status" class="status"></p>
+
+  <!-- 0.9.3. Owlbear sizes the popover from the manifest and gives the viewer no
+       edge to grab, so this IS the bottom edge: drag it and the panel follows.
+       0.9.2 put +/- buttons in the log header instead, which was not what anyone
+       means by resizable and was below the fold on a tall panel besides. The
+       buttons survive here as the keyboard-reachable path, beside the grip. -->
+  <div id="resizer" class="resizer" title="Drag to resize the panel">
+    <button id="shorter" class="ghost icon-btn" aria-label="Make the panel shorter">&minus;</button>
+    <div class="resizer-grip" role="separator" aria-label="Drag to resize the panel">
+      <span></span><span></span><span></span>
+    </div>
+    <span id="height-value" class="height-value">900</span>
+    <button id="taller" class="ghost icon-btn" aria-label="Make the panel taller">+</button>
+  </div>
 </div>
 
 <script type="module" src="roller.js"></script>

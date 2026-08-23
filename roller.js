@@ -23,7 +23,7 @@ import OBR from "./sdk.js";
 import {
   ID, ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
-  readEpochs, epochStatus,
+  readEpochs, epochStatus, concealedPlaceholder,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -33,6 +33,7 @@ let role = "PLAYER";
 let playerName = "Someone";
 let standalone = false;
 let hiddenLog = [];
+let concealMode = "open";   // "open" | "hidden" | "secret"
 let diceCount = 2;
 let difficulty = 1;
 
@@ -58,8 +59,10 @@ const labelEl = el("roll-label");
 const hintEl = el("rule-hint");
 const logEl = el("log");
 const statusEl = el("status");
-const hiddenWrap = el("hidden-wrap");
-const hiddenCheck = el("hidden-roll");
+const concealWrap = el("conceal-wrap");
+const concealSeg = el("conceal-seg");
+const concealSecretBtn = el("conceal-secret");
+const concealHint = el("conceal-hint");
 const clearBtn = el("clear-log");
 const gmPanel = el("gm-panel");
 const partyPanel = el("party-panel");
@@ -115,18 +118,37 @@ async function doRoll() {
     gain: result.momentumGained,
   };
 
-  if (role === "GM" && hiddenCheck.checked) {
-    // Never announced, so it cannot be read from the network by a player.
-    hiddenLog.unshift({ ...entry, hidden: true });
-    hiddenLog = hiddenLog.slice(0, MAX_LOG_ENTRIES);
-    saveHiddenLog();
-    render();
-    setStatus("Hidden roll. Only you can see this one.");
+  // SECRET: nothing leaves this browser, so no one can tell a roll happened. GM only
+  // — the role is re-checked here and not merely in the button's visibility, because
+  // a hidden attribute is not a control.
+  if (concealMode === "secret" && role === "GM") {
+    keepPrivately({ ...entry, conceal: "secret" });
+    setStatus("Secret roll. Nothing was sent to the table.");
+    return;
+  }
+
+  // HIDDEN: the full result stays here; the table gets a placeholder saying only that
+  // a roll happened, and who made it. Deliberately an ACTION entry — it is not a roll
+  // anyone can read, and shaping it as one would mean every consumer of a roll entry
+  // learning to handle a roll with no dice in it.
+  if (concealMode === "hidden") {
+    keepPrivately({ ...entry, conceal: "hidden" });
+    await announce({ type: "action", entry: concealedPlaceholder(entry) });
+    setStatus("Hidden roll. The table sees that you rolled, not what you got.");
     return;
   }
 
   await announce({ type: "roll", entry });
   setStatus("");
+}
+
+// The roller's own copy of a concealed roll. Never broadcast, never written to room
+// metadata; see loadHiddenLog() for why it is in localStorage.
+function keepPrivately(entry) {
+  hiddenLog.unshift(entry);
+  hiddenLog = hiddenLog.slice(0, MAX_LOG_ENTRIES);
+  saveHiddenLog();
+  render();
 }
 
 async function stepPool(pool, delta) {
@@ -181,9 +203,12 @@ function loadHiddenLog() {
   try {
     const raw = JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]");
     if (!Array.isArray(raw)) return [];
-    // Marked hidden on the way back in regardless of what was stored, so a mangled
-    // record can never render as an ordinary roll the GM believes the table saw.
-    return raw.slice(0, MAX_LOG_ENTRIES).map((e) => ({ ...e, hidden: true }));
+    // Concealment is asserted on the way back in regardless of what was stored, so a
+    // mangled record can never render as an ordinary roll the roller believes the
+    // table saw. Anything written before 0.9.3 was a GM secret roll by definition,
+    // because that was the only kind there was.
+    return raw.slice(0, MAX_LOG_ENTRIES)
+      .map((e) => ({ ...e, conceal: e.conceal || "secret" }));
   } catch {
     return [];
   }
@@ -344,22 +369,27 @@ function renderActionEntry(e) {
 
 function renderRollEntry(e) {
   const li = document.createElement("li");
-  li.className = "entry" + (e.hidden ? " is-hidden" : "");
+  li.className = "entry" + (e.conceal || e.hidden ? " is-hidden" : "");
 
   const head = document.createElement("div");
   head.className = "entry-head";
   const who = document.createElement("strong");
   who.textContent = e.who;
   head.append(who);
-  // 0.9.2: a badge rather than "(hidden)" tacked onto the name. Reported from play as
-  // hidden rolls "not consistently" reading as hidden — the word was there, in the
-  // same weight and colour as the character's name, at the end of a line the eye
-  // reads as an ordinary entry. Whether a roll reached the table is not a detail.
-  if (e.hidden) {
+  // 0.9.3: names WHICH kind of concealment, because they differ in what the table
+  // knows. `hidden` posted a placeholder, so the others know you rolled; `secret`
+  // posted nothing at all. Reading one as the other would be a real misunderstanding
+  // at the table, so they never share a label.
+  //
+  // `e.hidden` is the pre-0.9.3 shape, still sitting in GMs' stored private logs.
+  const conceal = e.conceal || (e.hidden ? "secret" : null);
+  if (conceal) {
     const tag = document.createElement("span");
-    tag.className = "entry-hidden-tag";
-    tag.textContent = "Hidden";
-    tag.title = "Not sent to the table. Only you can see this roll.";
+    tag.className = `entry-hidden-tag is-${conceal}`;
+    tag.textContent = conceal === "hidden" ? "Hidden" : "Secret";
+    tag.title = conceal === "hidden"
+      ? "Only you can see this result. The table was told that you rolled."
+      : "Only you can see this. Nothing was sent to the table at all.";
     head.append(tag);
   }
   if (e.label) {
@@ -429,6 +459,14 @@ function wireUI() {
     b.addEventListener("click", () => stepPool(b.dataset.pool, +b.dataset.delta));
   });
 
+  concealSeg?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-conceal]");
+    if (!btn || btn.hidden) return;
+    // Re-checked rather than trusted from the button: Secret is the GM's.
+    if (btn.dataset.conceal === "secret" && role !== "GM") return;
+    setConcealMode(btn.dataset.conceal);
+  });
+
   el("roll-btn").addEventListener("click", doRoll);
   clearBtn.addEventListener("click", clearLog);
   updateHint();
@@ -436,9 +474,33 @@ function wireUI() {
 
 function applyRole() {
   const isGM = role === "GM";
-  hiddenWrap.hidden = !isGM;
+  // Hidden is available to everyone from 0.9.3, so the mode picker is always visible.
+  // Only Secret is the GM's.
+  if (concealSecretBtn) concealSecretBtn.hidden = !isGM;
+  if (!isGM && concealMode === "secret") setConcealMode("open");
   clearBtn.hidden = !isGM;
   if (gmPanel) gmPanel.hidden = !isGM;
+  updateConcealHint();
+}
+
+const CONCEAL_HINTS = {
+  open: "The table sees this roll and its result.",
+  hidden: "The table sees that you rolled. The dice and the result stay with you.",
+  secret: "Nothing is sent. No one can tell a roll happened.",
+};
+
+function updateConcealHint() {
+  if (concealHint) concealHint.textContent = CONCEAL_HINTS[concealMode] || "";
+}
+
+function setConcealMode(mode) {
+  concealMode = mode;
+  if (concealSeg) {
+    concealSeg.querySelectorAll("[data-conceal]").forEach((b) => {
+      b.classList.toggle("on", b.dataset.conceal === mode);
+    });
+  }
+  updateConcealHint();
 }
 
 // -------------------------------------------------------------
@@ -706,9 +768,10 @@ function applyPartyVisibility() {
 // -------------------------------------------------------------
 async function startInOwlbear() {
   role = await OBR.player.getRole();
-  // Restored before the first render so the GM's own hidden rolls are on screen
-  // immediately rather than appearing after some later redraw.
-  if (role === "GM") hiddenLog = loadHiddenLog();
+  // Restored before the first render so concealed rolls are on screen immediately
+  // rather than appearing after some later redraw. Everyone has one from 0.9.3:
+  // Hidden is no longer the GM's alone.
+  hiddenLog = loadHiddenLog();
   playerName = (await OBR.player.getName()) || "Someone";
   if (!charEl.value) charEl.value = playerName;
   applyRole();
@@ -822,6 +885,48 @@ async function applyHeight(next, { persist = true } = {}) {
 function wireHeightControls() {
   el("shorter")?.addEventListener("click", () => applyHeight(panelHeight - HEIGHT_STEP));
   el("taller")?.addEventListener("click", () => applyHeight(panelHeight + HEIGHT_STEP));
+
+  // 0.9.3: a real drag. The popover has no resizable edge of its own, so the strip at
+  // the foot of the page stands in for one — grab it and the panel follows the
+  // pointer. Pointer events rather than mouse events so a trackpad or a touch screen
+  // behaves the same, and setPointerCapture so the drag survives the pointer leaving
+  // the strip, which it does immediately since the strip is only a few pixels tall.
+  const grip = el("resizer");
+  if (!grip) return;
+
+  let dragging = false;
+  let startY = 0;
+  let startHeight = 0;
+
+  grip.addEventListener("pointerdown", (e) => {
+    // Ignore the +/- buttons living in the same strip.
+    if (e.target.closest("button")) return;
+    dragging = true;
+    startY = e.clientY;
+    startHeight = panelHeight;
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add("is-dragging");
+    e.preventDefault();
+  });
+
+  grip.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    // Dragging DOWN grows the panel: the strip is its bottom edge, so the pointer and
+    // the edge move together. Not persisted per frame — a drag would otherwise write
+    // to localStorage a hundred times on the way down.
+    applyHeight(startHeight + (e.clientY - startY), { persist: false });
+  });
+
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    grip.classList.remove("is-dragging");
+    try { grip.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    // Written once, at the end, with whatever the drag settled on.
+    applyHeight(panelHeight);
+  };
+  grip.addEventListener("pointerup", endDrag);
+  grip.addEventListener("pointercancel", endDrag);
 }
 
 function startStandalone() {
@@ -832,6 +937,7 @@ function startStandalone() {
   playerName = "Local test";
   charEl.value = playerName;
   applyRole();
+  setConcealMode("open");
   render();
   setStatus("Standalone preview. Not connected to an Owlbear room.");
 }

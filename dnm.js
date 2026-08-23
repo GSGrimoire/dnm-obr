@@ -166,6 +166,30 @@ export function sanitizeEntry(entry) {
 }
 
 // -------------------------------------------------------------
+// The placeholder for a hidden roll (0.9.3)
+// -------------------------------------------------------------
+// A hidden roll tells the table that someone rolled and nothing else. This builds
+// that announcement, and it lives here rather than in the roller so the fields it
+// carries can be asserted: the whole point is what it must NOT contain.
+//
+// Built by allow-list, never by deleting from the source entry. Spreading the roll
+// and stripping `detail`, `succ` and the rest would leak the day someone adds a
+// field, and the leak would be silent.
+export function concealedPlaceholder(entry) {
+  return {
+    id: `${entry.id}-c`,
+    t: entry.t,
+    kind: "action",
+    who: entry.who,
+    label: "Hidden roll",
+    // The typed label travels if there is one — "Hidden roll — Spotting the ambush"
+    // is useful at the table. The dice, the target, the successes and the verdict
+    // never do.
+    detail: entry.label ? entry.label : "result not shared",
+  };
+}
+
+// -------------------------------------------------------------
 // Which events require the GM (0.9.2)
 // -------------------------------------------------------------
 // Enforced in background.js, which is the only writer of room metadata and therefore
