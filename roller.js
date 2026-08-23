@@ -14,16 +14,19 @@
 // The cost is a size cap: Owlbear allows 16 kB of room metadata TOTAL
 // across every extension in the room, so the log trims itself.
 //
-// HIDDEN ROLLS:
-// A hidden roll is never written to room metadata, so a player cannot read
-// it out of devtools. It lives only in the GM's open panel for the session.
+// CONCEALED ROLLS (0.9.4):
+// SECRET is absolute — never broadcast, never in room metadata, GM only.
+// HIDDEN travels in full and is redacted at RENDER time, because the GM has to
+// be able to read a player's hidden roll and Owlbear offers no private channel.
+// It hides a result from other players' screens, not from their devtools.
+// See canRevealConcealed() in dnm.js.
 // =============================================================
 
 import OBR from "./sdk.js";
 import {
   ID, ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
-  readEpochs, epochStatus, concealedPlaceholder,
+  readEpochs, epochStatus, canRevealConcealed,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -31,6 +34,7 @@ const MAX_LOG_ENTRIES = 40;
 let state = structuredClone(EMPTY_STATE);
 let role = "PLAYER";
 let playerName = "Someone";
+let myPlayerId = null;   // whose hidden rolls this client may read in full
 let standalone = false;
 let hiddenLog = [];
 let concealMode = "open";   // "open" | "hidden" | "secret"
@@ -127,14 +131,20 @@ async function doRoll() {
     return;
   }
 
-  // HIDDEN: the full result stays here; the table gets a placeholder saying only that
-  // a roll happened, and who made it. Deliberately an ACTION entry — it is not a roll
-  // anyone can read, and shaping it as one would mean every consumer of a roll entry
-  // learning to handle a roll with no dice in it.
+  // HIDDEN: the whole roll is announced, tagged with who made it, and each client
+  // decides what to draw — the GM and the roller see the result, everyone else sees
+  // that a roll happened. It is NOT kept in the private log, because it comes back
+  // through room metadata like any other roll and would otherwise appear twice.
+  //
+  // 0.9.3 broadcast a redacted placeholder instead. That was genuinely unreadable, and
+  // it also meant the GM could not see a player's hidden roll — which is the point of
+  // a GM. Owlbear has no private channel to send a result down (see
+  // canRevealConcealed in dnm.js), so this hides the roll from other players' screens
+  // and not from their devtools. Secret remains the mode for a result nobody else can
+  // reach at all.
   if (concealMode === "hidden") {
-    keepPrivately({ ...entry, conceal: "hidden" });
-    await announce({ type: "action", entry: concealedPlaceholder(entry) });
-    setStatus("Hidden roll. The table sees that you rolled, not what you got.");
+    await announce({ type: "roll", entry: { ...entry, conceal: "hidden", by: myPlayerId } });
+    setStatus("Hidden roll. The GM sees it; the rest of the table sees only that you rolled.");
     return;
   }
 
@@ -371,6 +381,30 @@ function renderRollEntry(e) {
   const li = document.createElement("li");
   li.className = "entry" + (e.conceal || e.hidden ? " is-hidden" : "");
 
+  // 0.9.4. A hidden roll reaches every client in full, and this is what stops it being
+  // DRAWN for people who should not read it. Redacting at render rather than at send
+  // is what lets the GM see a player's hidden roll at all.
+  if (!canRevealConcealed(e, { role, playerId: myPlayerId })) {
+    const head = document.createElement("div");
+    head.className = "entry-head";
+    const who = document.createElement("strong");
+    who.textContent = e.who;
+    head.append(who);
+    const tag = document.createElement("span");
+    tag.className = "entry-hidden-tag is-hidden";
+    tag.textContent = "Hidden";
+    tag.title = "This roll was made privately. The GM can see the result.";
+    head.append(tag);
+    li.append(head);
+    const note = document.createElement("div");
+    note.className = "entry-test";
+    // The typed label survives because "Hidden roll — Spotting the ambush" is useful
+    // at the table. The dice, the target and the verdict are simply not drawn.
+    note.textContent = e.label ? e.label : "Result not shared.";
+    li.append(note);
+    return li;
+  }
+
   const head = document.createElement("div");
   head.className = "entry-head";
   const who = document.createElement("strong");
@@ -485,8 +519,10 @@ function applyRole() {
 
 const CONCEAL_HINTS = {
   open: "The table sees this roll and its result.",
-  hidden: "The table sees that you rolled. The dice and the result stay with you.",
-  secret: "Nothing is sent. No one can tell a roll happened.",
+  // Says the GM plainly, because that is the whole difference between the two, and a
+  // player choosing Hidden should not be surprised later that the GM read it.
+  hidden: "The GM sees the result. The rest of the table sees only that you rolled.",
+  secret: "Nothing is sent at all. No one can tell a roll happened.",
 };
 
 function updateConcealHint() {
@@ -768,6 +804,7 @@ function applyPartyVisibility() {
 // -------------------------------------------------------------
 async function startInOwlbear() {
   role = await OBR.player.getRole();
+  try { myPlayerId = await OBR.player.getId(); } catch { myPlayerId = null; }
   // Restored before the first render so concealed rolls are on screen immediately
   // rather than appearing after some later redraw. Everyone has one from 0.9.3:
   // Hidden is no longer the GM's alone.

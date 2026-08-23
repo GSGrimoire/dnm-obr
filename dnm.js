@@ -162,31 +162,43 @@ export function sanitizeEntry(entry) {
     pass: !!entry.pass,
     gain: cleanCount(entry.gain),
     hidden: !!entry.hidden,
+    // 0.9.4. These decide who may draw the entry, so the reducer has to carry them —
+    // stripping them here would turn a concealed roll into an ordinary one the moment
+    // it round-tripped through room metadata, which is the worst possible failure for
+    // this feature. Both are constrained rather than copied: an arbitrary `conceal`
+    // string would fall through canRevealConcealed() as "not concealed".
+    conceal: entry.conceal === "hidden" || entry.conceal === "secret" ? entry.conceal : null,
+    by: cleanText(entry.by, FIELD_LIMITS.id) || null,
   };
 }
 
 // -------------------------------------------------------------
-// The placeholder for a hidden roll (0.9.3)
+// Who may read a concealed roll (0.9.4)
 // -------------------------------------------------------------
-// A hidden roll tells the table that someone rolled and nothing else. This builds
-// that announcement, and it lives here rather than in the roller so the fields it
-// carries can be asserted: the whole point is what it must NOT contain.
+// Two kinds of concealment, and they give very different guarantees.
 //
-// Built by allow-list, never by deleting from the source entry. Spreading the roll
-// and stripping `detail`, `succ` and the rest would leak the day someone adds a
-// field, and the leak would be silent.
-export function concealedPlaceholder(entry) {
-  return {
-    id: `${entry.id}-c`,
-    t: entry.t,
-    kind: "action",
-    who: entry.who,
-    label: "Hidden roll",
-    // The typed label travels if there is one — "Hidden roll — Spotting the ambush"
-    // is useful at the table. The dice, the target, the successes and the verdict
-    // never do.
-    detail: entry.label ? entry.label : "result not shared",
-  };
+// SECRET is absolute. Nothing is broadcast and nothing is written to room metadata,
+// so the result exists only in the roller's own browser. Only the GM may roll it.
+//
+// HIDDEN is a courtesy, and it is important to be straight about that. From 0.9.4 a
+// player's hidden roll must reach the GM — "the GM should know everything" — and
+// Owlbear offers NO private channel to do it with: `OBR.broadcast.sendMessage` takes
+// only ALL, REMOTE or LOCAL, and every storage surface it has (room metadata, player
+// metadata, item metadata) is readable by every client in the room.
+//
+// So the full entry travels to everyone and each client decides what to draw. That
+// hides the result from other players' SCREENS. It does not hide it from a player who
+// opens devtools. Anyone wanting a result that a player genuinely cannot read has to
+// use Secret, which is why Secret still exists rather than being folded into Hidden.
+//
+// 0.9.3 sent a redacted placeholder instead, which really was unreadable — but it also
+// meant the GM could not see a player's hidden roll, which is the thing being fixed.
+export function canRevealConcealed(entry, viewer) {
+  if (!entry || !entry.conceal) return true;      // an ordinary roll
+  // A secret roll never leaves its own browser, so anything holding one may draw it.
+  if (entry.conceal === "secret") return true;
+  if (viewer?.role === "GM") return true;
+  return !!(viewer?.playerId && entry.by === viewer.playerId);
 }
 
 // -------------------------------------------------------------
