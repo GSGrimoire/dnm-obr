@@ -226,7 +226,12 @@ button:disabled { opacity: .25; cursor: not-allowed; }
 .gm-group { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .gm-group-label {
   font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--text-dim); width: 56px; flex: none;
+  /* 0.9.5B: was 56px, which wrapped "Complication Level" mid-word and pushed the
+     number buttons out of line with the rows above and below it. Sized to the
+     longest label rather than the shortest, and given a line-height so a two-line
+     label still sits level with its buttons. */
+  text-transform: uppercase; color: var(--text-dim); width: 74px; flex: none;
+  line-height: 1.25;
 }
 .gm-buttons { display: flex; flex-wrap: wrap; gap: 5px; }
 .gm-btn {
