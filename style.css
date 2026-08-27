@@ -456,3 +456,59 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
   margin-left: 6px;
   white-space: nowrap;
 }
+
+/* ============================================================
+   COMPLICATION RANGE + MOMENTUM CLAIM (0.9.5)
+   ============================================================ */
+
+/* Threat-coloured, because lowering the Complication range raises the danger, which
+   is the thing Threat measures. Distinct from the boundary buttons beside them so a
+   press meant for End Scene is not aimed here by mistake. */
+.gm-btn.danger {
+  color: var(--accent);
+  border-color: rgba(255, 107, 53, 0.45);
+  background: rgba(255, 107, 53, 0.08);
+  min-width: 38px;
+}
+
+.gm-btn.danger:hover:not(:disabled) {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(255, 107, 53, 0.35);
+}
+
+/* The chosen threshold. Filled rather than outlined, so the current setting reads at
+   a glance from across the panel. */
+.gm-btn.danger.on {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.claim-momentum {
+  display: inline-block;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  color: var(--teal);
+  border: 1px solid var(--teal-dim);
+  background: var(--teal-faint);
+  cursor: pointer;
+}
+
+.claim-momentum:hover:not(:disabled) {
+  border-color: var(--teal);
+  color: var(--text-bright);
+  box-shadow: 0 0 10px var(--teal-glow);
+}
+
+/* Greyed once taken, and greyed for anyone it does not belong to. Both are "you
+   cannot press this", so they look the same. */
+.claim-momentum:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+  border-style: dashed;
+}

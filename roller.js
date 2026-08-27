@@ -26,7 +26,7 @@ import OBR from "./sdk.js";
 import {
   ID, ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
-  readEpochs, epochStatus, canRevealConcealed,
+  readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -103,7 +103,8 @@ async function doRoll() {
   const attrValue = clamp(+attrValEl.value, 0, 20);
   const skillValue = clamp(+skillValEl.value, 0, 20);
   const dice = rollDice(diceCount);
-  const result = resolveRoll(dice, attrValue, skillValue, difficulty);
+  const compAt = readCompAt(state);
+  const result = resolveRoll(dice, attrValue, skillValue, difficulty, compAt);
 
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -115,6 +116,7 @@ async function doRoll() {
     sn: SKILLS[skillKeyEl.value],
     sv: skillValue,
     diff: difficulty,
+    compAt,
     detail: result.detail,
     succ: result.successes,
     comp: result.complications,
@@ -148,7 +150,7 @@ async function doRoll() {
     return;
   }
 
-  await announce({ type: "roll", entry });
+  await announce({ type: "roll", entry: { ...entry, by: myPlayerId } });
   setStatus("");
 }
 
@@ -234,6 +236,64 @@ function saveHiddenLog() {
   }
 }
 
+// 0.9.5. The room's Complication threshold. GM only, re-checked here rather than
+// trusted from the panel being hidden.
+async function pushCompAt(value) {
+  if (role !== "GM") return;
+  const next = Math.max(COMP_AT_MIN, Math.min(COMP_AT_MAX, Math.round(Number(value) || COMP_AT_MAX)));
+  if (next === readCompAt(state)) return;
+  await announce({
+    type: "compAt",
+    value: next,
+    entry: {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      t: Date.now(),
+      kind: "action",
+      who: "GM",
+      label: "Complication range",
+      detail: next >= COMP_AT_MAX ? "back to 20 only" : `now ${next} or higher`,
+    },
+  });
+  setStatus(next >= COMP_AT_MAX ? "Complications on 20 only." : `Complications on ${next}+.`);
+}
+
+function applyCompAtButtons() {
+  const seg = el("comp-at-seg");
+  if (!seg) return;
+  const current = readCompAt(state);
+  seg.querySelectorAll("[data-comp]").forEach((b) => {
+    b.classList.toggle("on", Number(b.dataset.comp) === current);
+  });
+}
+
+// 0.9.5. Takes a roll's surplus successes into the group Momentum pool.
+//
+// Offered to the person who rolled and to the GM, and nobody else: it is their
+// Momentum to claim or to spend instead, and the GM needs it for rolls made on a
+// sheet whose owner has since closed it. The claim is announced separately from the
+// pool change so the greying-out reaches every client even if the pool write is
+// refused.
+async function claimMomentum(entry) {
+  if (!entry || entry.claimed || !(entry.gain > 0)) return;
+  if (role !== "GM" && entry.by !== myPlayerId) return;
+  await announce({ type: "claim", id: entry.id });
+  await announce({ type: "pool", pool: "momentum", delta: entry.gain });
+  await announce({
+    type: "action",
+    entry: {
+      id: `${entry.id}-m`,
+      t: Date.now(),
+      kind: "action",
+      who: entry.who,
+      label: "Momentum from a roll",
+      detail: `added ${entry.gain} to the group pool`,
+      pool: "momentum",
+      delta: entry.gain,
+    },
+  });
+  setStatus(`Added ${entry.gain} Momentum to the group pool.`);
+}
+
 async function clearLog() {
   if (role !== "GM") return;
   await announce({ type: "clear" });
@@ -311,10 +371,18 @@ function syncValuesFromChar() {
 function updateHint() {
   const a = clamp(+attrValEl.value, 0, 20);
   const s = clamp(+skillValEl.value, 0, 20);
-  hintEl.textContent = `Success on ${a} or under · Critical on ${s} or under · Complication on 20`;
+  const compAt = readCompAt(state);
+  // Named explicitly rather than left at "20": once the GM lowers it, a player reading
+  // the old line would be working from the wrong odds.
+  const compText = compAt >= COMP_AT_MAX
+    ? "Complication on 20"
+    : `Complication on ${compAt}+ (GM raised the danger)`;
+  hintEl.textContent = `Success on ${a} or under · Critical on ${s} or under · ${compText}`;
 }
 
 function render() {
+  applyCompAtButtons();
+  updateHint();
   el("momentum-value").textContent = state.momentum ?? 0;
   el("threat-value").textContent = state.threat ?? 0;
   document.querySelectorAll('[data-pool="threat"]').forEach((b) => { b.disabled = role !== "GM"; });
@@ -450,6 +518,22 @@ function renderRollEntry(e) {
   }
   li.append(dice);
 
+  // 0.9.5. The surplus is claimable from the log rather than only reported there.
+  if (e.gain > 0) {
+    const claim = document.createElement("button");
+    claim.className = "mini claim-momentum";
+    const mine = role === "GM" || e.by === myPlayerId;
+    claim.disabled = !!e.claimed || !mine;
+    claim.textContent = e.claimed ? `+${e.gain} Momentum taken` : `Add ${e.gain} Momentum`;
+    claim.title = e.claimed
+      ? "Already added to the group pool."
+      : mine
+        ? "Add this roll's surplus to the group Momentum pool."
+        : "Only the person who rolled, or the GM, can add this.";
+    if (!claim.disabled) claim.addEventListener("click", () => claimMomentum(e));
+    li.append(claim);
+  }
+
   const sum = document.createElement("div");
   sum.className = "entry-sum " + (e.pass ? "pass" : "fail");
   const parts = [`${e.succ} ${e.succ === 1 ? "success" : "successes"} vs D${e.diff}`];
@@ -499,6 +583,11 @@ function wireUI() {
     // Re-checked rather than trusted from the button: Secret is the GM's.
     if (btn.dataset.conceal === "secret" && role !== "GM") return;
     setConcealMode(btn.dataset.conceal);
+  });
+
+  el("comp-at-seg")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-comp]");
+    if (btn) pushCompAt(btn.dataset.comp);
   });
 
   el("roll-btn").addEventListener("click", doRoll);
@@ -565,6 +654,28 @@ async function pushEpoch(boundary) {
       detail: "called for the whole table",
     },
   });
+  // 0.9.5. Ending a scene costs the group 1 Momentum, per the rules.
+  //
+  // Applied HERE, on the GM's single press, and deliberately not on the sheet's own
+  // End Scene button. A sheet-side deduction would fire once per character — five
+  // players ending the same scene would cost the table five Momentum. The scene ends
+  // once, so the pool moves once, and the GM is the one who ends it.
+  if (boundary === "scene") {
+    await announce({ type: "pool", pool: "momentum", delta: -1 });
+    await announce({
+      type: "action",
+      entry: {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        t: Date.now(),
+        kind: "action",
+        who: "GM",
+        label: "End Scene",
+        detail: "the group loses 1 Momentum",
+        pool: "momentum",
+        delta: -1,
+      },
+    });
+  }
   setStatus(`${label} sent to the table.`);
 }
 

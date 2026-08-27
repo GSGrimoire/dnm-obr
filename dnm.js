@@ -12,10 +12,31 @@ export const CHANNEL = `${ID}/events`;
 // v2 (extension 0.8.0): epochs added. A client running the v1 shape simply has no
 // epochs key; readers must default it rather than assume presence, because room
 // metadata written before 0.8.0 is still sitting in live rooms.
+// v3 (extension 0.9.5): compAt added — the die value at or above which a roll counts
+// as a Complication. 20 is the rulebook default; the GM lowers it to make a scene
+// harder. Rooms written before 0.9.5 have no compAt, so readers default it rather
+// than assume presence, exactly as epochs did.
 export const EMPTY_STATE = {
-  v: 2, momentum: 0, threat: 0, log: [],
+  v: 3, momentum: 0, threat: 0, log: [],
   epochs: { scene: 0, session: 0, adventure: 0, breather: 0, break: 0, bed: 0 },
+  compAt: 20,
 };
+
+// The range the GM may choose from. Below 15 a d20 would complicate more often than
+// not, which stops being a difficult scene and starts being a broken one.
+export const COMP_AT_MIN = 15;
+export const COMP_AT_MAX = 20;
+
+export function readCompAt(state) {
+  const raw = state?.compAt;
+  // Checked for absence BEFORE coercion. Number(null) is 0, which is finite, so a
+  // null would otherwise clamp to the floor and quietly make every roll of 15+ a
+  // Complication in a room that had never set a threshold.
+  if (raw === null || raw === undefined || raw === "") return COMP_AT_MAX;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return COMP_AT_MAX;
+  return Math.max(COMP_AT_MIN, Math.min(COMP_AT_MAX, n));
+}
 
 // The boundaries a GM can push to the whole table. Rests are listed alongside scene
 // boundaries because they work the same way here: a counter the GM increments and
@@ -162,6 +183,10 @@ export function sanitizeEntry(entry) {
     pass: !!entry.pass,
     gain: cleanCount(entry.gain),
     hidden: !!entry.hidden,
+    // 0.9.5. `gain` already records the surplus; these two decide whether it can still
+    // be claimed and by whom, so they have to survive the round trip like `conceal`.
+    claimed: !!entry.claimed,
+    compAt: cleanCount(entry.compAt) || COMP_AT_MAX,
     // 0.9.4. These decide who may draw the entry, so the reducer has to carry them —
     // stripping them here would turn a concealed roll into an ordinary one the moment
     // it round-tripped through room metadata, which is the worst possible failure for
@@ -217,7 +242,7 @@ export function canRevealConcealed(entry, viewer) {
 // The creator's own tooltip had it right all along — "Anyone can add; only the GM
 // should spend" — so what is privileged is the DIRECTION, not the pool. A player can
 // pay Threat in and cannot drain it.
-const GM_ONLY_TYPES = new Set(["epoch", "clear"]);
+const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt"]);
 
 export function isGmOnlyEvent(ev) {
   if (!ev || typeof ev !== "object") return false;
@@ -298,6 +323,18 @@ export function applyEvent(state, ev) {
     const delta = Math.round(Number(ev.delta) || 0);
     const bounded = Math.max(-999, Math.min(999, delta));
     next[ev.pool] = Math.max(0, Math.min(9999, (next[ev.pool] || 0) + bounded));
+  } else if (ev?.type === "claim" && ev.id) {
+    // 0.9.5. Marks a roll's surplus Momentum as taken. Shared state rather than local,
+    // so the button greys out on EVERY client — otherwise two people would each see an
+    // unclaimed roll and the pool would gain the surplus twice.
+    //
+    // One-way and idempotent: claiming an already-claimed entry changes nothing, which
+    // is what makes a double-click or a re-delivered broadcast harmless.
+    next.log = next.log.map((e) => (e.id === ev.id ? { ...e, claimed: true } : e));
+  } else if (ev?.type === "compAt") {
+    // Assignment, not increment: the GM is choosing a value, and two GM windows
+    // settling on the same number is the correct outcome rather than a conflict.
+    next.compAt = Math.max(COMP_AT_MIN, Math.min(COMP_AT_MAX, Math.round(Number(ev.value) || COMP_AT_MAX)));
   } else if (ev?.type === "clear") {
     next.log = [];
   }
@@ -310,6 +347,7 @@ export function trimState(state) {
   // Epochs are a fixed handful of integers and must survive trimming. Losing one
   // would send every sheet backwards and re-apply a boundary the table already had.
   next.epochs = readEpochs(next);
+  next.compAt = readCompAt(next);
   next.log = (next.log || []).slice(0, MAX_LOG_ENTRIES);
   while (next.log.length > 1 && JSON.stringify(next).length > MAX_STATE_BYTES) next.log.pop();
   return next;
@@ -408,8 +446,12 @@ export function rebuildCode(parts, cpIndex, char) {
 // the core rulebook: a die equal to or under the Attribute is a success, a die
 // equal to or under the Skill is a critical worth two successes, and a natural
 // 20 is a Complication. Order matters, 20 is never a success.
-export function classifyDie(value, attrValue, skillValue) {
-  if (value === 20) return "complication";
+// compAt defaults to 20 so every existing caller keeps the rulebook behaviour.
+// Order matters and has not changed: a die at or above the Complication threshold is a
+// Complication and can never also be a success, even when the threshold is low enough
+// to overlap the Attribute.
+export function classifyDie(value, attrValue, skillValue, compAt = COMP_AT_MAX) {
+  if (value >= compAt) return "complication";
   if (value <= skillValue) return "crit";
   if (value <= attrValue) return "success";
   return "fail";
@@ -421,11 +463,11 @@ export function rollDice(n) {
   return out;
 }
 
-export function resolveRoll(dice, attrValue, skillValue, diff) {
+export function resolveRoll(dice, attrValue, skillValue, diff, compAt = COMP_AT_MAX) {
   let successes = 0;
   let complications = 0;
   const detail = dice.map((d) => {
-    const kind = classifyDie(d, attrValue, skillValue);
+    const kind = classifyDie(d, attrValue, skillValue, compAt);
     if (kind === "crit") successes += 2;
     else if (kind === "success") successes += 1;
     else if (kind === "complication") complications += 1;
