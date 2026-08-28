@@ -16,10 +16,14 @@ export const CHANNEL = `${ID}/events`;
 // as a Complication. 20 is the rulebook default; the GM lowers it to make a scene
 // harder. Rooms written before 0.9.5 have no compAt, so readers default it rather
 // than assume presence, exactly as epochs did.
+// v4 (extension 0.9.6): bonds added — a short queue of pending bond effects waiting
+// for the sheet they belong to. Same defaulting rule again: a room written before
+// 0.9.6 has no bonds key, and a reader must treat that as an empty queue.
 export const EMPTY_STATE = {
-  v: 3, momentum: 0, threat: 0, log: [],
+  v: 4, momentum: 0, threat: 0, log: [],
   epochs: { scene: 0, session: 0, adventure: 0, breather: 0, break: 0, bed: 0 },
   compAt: 20,
+  bonds: [],
 };
 
 // The range the GM may choose from. Below 15 a d20 would complicate more often than
@@ -227,6 +231,96 @@ export function canRevealConcealed(entry, viewer) {
 }
 
 // -------------------------------------------------------------
+// Bond effects (0.9.6)
+// -------------------------------------------------------------
+// A bond pays out on somebody ELSE'S sheet, and at any moment nearly every sheet at
+// the table is closed. That is the same problem epochs solved, so this is the same
+// answer: a small queue in room metadata that each sheet drains when it next opens,
+// rather than a broadcast that only reaches whoever happens to be looking.
+//
+// Two kinds, and they resolve at opposite ends, which is not an inconsistency but
+// the rules:
+//
+//   RIVALRY  "When an ally with whom the character has a rivalry regains one or more
+//            Spirit by adding to Threat, the character recovers one Spirit as well."
+//            The BOND HOLDER benefits, and only their sheet knows their bond list.
+//            So Adrenaline Rush announces the actor and nothing else; every other
+//            sheet decides for itself whether it is owed a Spirit. Note the
+//            direction — it reads backwards at first. The person spending Threat
+//            does not need a bond at all.
+//
+//   GRANT    Second Wind, and giving up Spirit at a rest. Here the HELPER holds the
+//            bond and the +1 lands on the ally, so the helper has to name a target
+//            and works the sum out at their end. The queue just carries the total.
+//
+// Not GM-only. A forged rivalry effect can only land on a sheet that already holds a
+// rivalry naming that actor, for one Spirit; a forged grant names a target who has to
+// exist. That is ordinary play with a typo, not a privilege to guard, and putting it
+// in isGmOnlyEvent() would break every bond at a GM-less table.
+export const MAX_BOND_EFFECTS = 12;
+
+// An effect older than this is dropped rather than kept waiting. A player who has not
+// opened their sheet in six hours is at a different session, and arriving to a Spirit
+// from a fight two weeks ago is worse than missing it.
+export const BOND_EFFECT_TTL_MS = 6 * 60 * 60 * 1000;
+
+const BOND_KINDS = new Set(["rivalry", "grant"]);
+
+// Bond names are free text typed during character creation, and the character names
+// they have to match are free text too. Case and stray spaces are the difference
+// between a bond that fires and one that silently does nothing, so both sides
+// normalise through this single function rather than each comparing in its own way.
+export function bondNameKey(name) {
+  return String(name == null ? "" : name).trim().toLowerCase();
+}
+
+export function bondNamesMatch(a, b) {
+  const x = bondNameKey(a);
+  return !!x && x === bondNameKey(b);
+}
+
+export function sanitizeBondEffect(effect) {
+  if (!effect || typeof effect !== "object") return null;
+  if (!BOND_KINDS.has(effect.kind)) return null;
+  const id = cleanText(effect.id, FIELD_LIMITS.id);
+  if (!id) return null;
+  const t = Number(effect.t);
+  const base = {
+    id,
+    t: Number.isFinite(t) ? t : Date.now(),
+    kind: effect.kind,
+    // Who caused it. Present on both kinds so the recipient's log can say why.
+    from: cleanText(effect.from, FIELD_LIMITS.who),
+  };
+  if (effect.kind === "rivalry") return base;
+  const amount = Math.round(Number(effect.amount) || 0);
+  return {
+    ...base,
+    target: cleanText(effect.target, FIELD_LIMITS.who),
+    // Second Wind restores at most 3, plus at most 1 from a supportive bond. Four is
+    // the ceiling the rules allow and the reducer is where it is worth enforcing,
+    // because the sender's clamp runs in a tab the sender controls.
+    amount: Math.max(0, Math.min(4, amount)),
+    source: cleanText(effect.source, FIELD_LIMITS.label),
+  };
+}
+
+// Rooms written before 0.9.6 have no bonds key at all, so this defaults rather than
+// assuming presence — the same rule readEpochs() and readCompAt() follow.
+export function readBondQueue(state) {
+  const raw = Array.isArray(state?.bonds) ? state.bonds : [];
+  return raw.map(sanitizeBondEffect).filter(Boolean);
+}
+
+// Age out, then cap. Ordered oldest first so a sheet draining the queue applies
+// effects in the order they happened.
+export function pruneBondQueue(queue, now = Date.now()) {
+  return queue
+    .filter((fx) => now - fx.t <= BOND_EFFECT_TTL_MS)
+    .slice(-MAX_BOND_EFFECTS);
+}
+
+// -------------------------------------------------------------
 // Which events require the GM (0.9.2)
 // -------------------------------------------------------------
 // Enforced in background.js, which is the only writer of room metadata and therefore
@@ -331,6 +425,14 @@ export function applyEvent(state, ev) {
     // One-way and idempotent: claiming an already-claimed entry changes nothing, which
     // is what makes a double-click or a re-delivered broadcast harmless.
     next.log = next.log.map((e) => (e.id === ev.id ? { ...e, claimed: true } : e));
+  } else if (ev?.type === "bond" && ev.effect) {
+    // 0.9.6. Deduplicated by id like a roll, for the same reason: a broadcast can be
+    // delivered twice, and an effect that pays out twice is a free Spirit.
+    const effect = sanitizeBondEffect(ev.effect);
+    if (!effect) return next;
+    const queue = readBondQueue(next);
+    if (queue.some((fx) => fx.id === effect.id)) return next;
+    next.bonds = pruneBondQueue([...queue, effect]);
   } else if (ev?.type === "compAt") {
     // Assignment, not increment: the GM is choosing a value, and two GM windows
     // settling on the same number is the correct outcome rather than a conflict.
@@ -348,6 +450,11 @@ export function trimState(state) {
   // would send every sheet backwards and re-apply a boundary the table already had.
   next.epochs = readEpochs(next);
   next.compAt = readCompAt(next);
+  // 0.9.6. Pending bond effects are trimmed by age and count here, and then left
+  // alone by the loop below. They are a dozen small objects at most, and unlike a log
+  // line an undrained one still owes somebody a Spirit — so the log gives way to them
+  // rather than the other way round.
+  next.bonds = pruneBondQueue(readBondQueue(next));
   next.log = (next.log || []).slice(0, MAX_LOG_ENTRIES);
   while (next.log.length > 1 && JSON.stringify(next).length > MAX_STATE_BYTES) next.log.pop();
   return next;
