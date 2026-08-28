@@ -88,6 +88,15 @@ input:focus, select:focus { outline: none; border-color: var(--border-bright); b
   min-width: 30px;
   color: var(--text-bright);
 }
+/* 0.9.7. A run of presses is summed and sent once, so between the last press and the
+   room confirming it this number is the client's expectation rather than the room's
+   answer. Dimmed and underlined while that is true: the value is right, and the panel
+   is not pretending it has been agreed yet. */
+.pool-value.unsettled {
+  opacity: 0.72;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
 
 button {
   font-family: var(--font-display);

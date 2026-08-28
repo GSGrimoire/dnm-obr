@@ -321,6 +321,95 @@ export function pruneBondQueue(queue, now = Date.now()) {
 }
 
 // -------------------------------------------------------------
+// Coalescing pool nudges (0.9.7)
+// -------------------------------------------------------------
+// Reported from play: raising Threat by 3 meant pressing + three times, which sent
+// three pool events and wrote three "added 1 Threat" lines. The log recorded the
+// clicking rather than the decision, and the table had to add the lines up.
+//
+// So a run of nudges to the SAME pool with the SAME label is summed and sent once:
+// one pool event, one log line reading "added 3 Threat". A different pool or a
+// different label flushes the run first, which is what keeps an ability from being
+// folded into a manual adjustment — every ability passes a reason, and "Nanobarrier"
+// is not "manual adjustment", so they can never merge.
+//
+// This also makes the Maverick drive readable. "When the GM spends 3 or more Threat
+// AT ONCE" was undetectable when a spend of 3 arrived as three separate ones.
+//
+// THE DISPLAY PROBLEM, AND WHY peek() EXISTS:
+// Pool events are deltas and are never applied optimistically — applying locally and
+// again from the GM's update would double count. So without help the number would sit
+// still for the length of the window and the buttons would feel broken. peek() reports
+// what has been counted but not yet confirmed, so a display can show the value the
+// player expects and mark it as unsettled.
+//
+// It keeps reporting across the flush, until settle() is called or the safety timeout
+// fires. Clearing on flush instead would drop the number back to its old value for the
+// length of the broadcast round trip — a visible flinch on every press.
+export const POOL_BATCH_MS = 900;      // quiet period before a run is sent
+export const POOL_BATCH_MAX_MS = 2500; // ceiling, so holding a button still lands
+export const POOL_SETTLE_MS = 5000;    // give up waiting for confirmation
+
+export function createPoolBatcher(send, opts = {}) {
+  const delay = opts.delay ?? POOL_BATCH_MS;
+  const maxWait = opts.maxWait ?? POOL_BATCH_MAX_MS;
+  const settleAfter = opts.settleAfter ?? POOL_SETTLE_MS;
+
+  let pending = null;   // { pool, label, delta }
+  let timer = null;
+  let deadline = 0;
+  let settleTimer = null;
+  const inFlight = { momentum: 0, threat: 0 };
+
+  const stopTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+  // Called when the room's own value arrives, which is the only real confirmation
+  // there is. Until then the display is showing a promise.
+  function settle() {
+    if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+    inFlight.momentum = 0;
+    inFlight.threat = 0;
+  }
+
+  function flush() {
+    stopTimer();
+    const batch = pending;
+    pending = null;
+    deadline = 0;
+    // A run that cancels itself out — one press up, one down — is not an event and
+    // not a log line. Previously it was two of each.
+    if (!batch || !batch.delta) return null;
+    inFlight[batch.pool] = (inFlight[batch.pool] || 0) + batch.delta;
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(settle, settleAfter);
+    send(batch);
+    return batch;
+  }
+
+  function add(pool, delta, label) {
+    const n = Math.round(Number(delta) || 0);
+    if (!n) return;
+    if (pending && (pending.pool !== pool || pending.label !== label)) flush();
+    if (!pending) {
+      pending = { pool, label, delta: 0 };
+      deadline = Date.now() + maxWait;
+    }
+    pending.delta += n;
+    // Debounced, but never past the ceiling: someone leaning on + should still see
+    // the pool move rather than nothing at all until they stop.
+    stopTimer();
+    timer = setTimeout(flush, Math.max(0, Math.min(delay, deadline - Date.now())));
+  }
+
+  function peek(pool) {
+    const queued = pending && pending.pool === pool ? pending.delta : 0;
+    return queued + (inFlight[pool] || 0);
+  }
+
+  return { add, flush, peek, settle };
+}
+
+// -------------------------------------------------------------
 // Which events require the GM (0.9.2)
 // -------------------------------------------------------------
 // Enforced in background.js, which is the only writer of room metadata and therefore

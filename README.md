@@ -203,3 +203,22 @@ of three states:
 - **Not synced** — has never met this room. A newly built or newly attached character reads
   this way and is **not** behind: it has nothing to catch up on, and its first sheet open
   adopts the room's position without applying anything.
+
+---
+
+## Working on this repo
+
+The conventions for **both** halves of the toolchain live in the creator repo, at
+[`dnm-cc/.claude/skills/gsgrimoire-dnm-vtt/`](https://github.com/GSGrimoire/dnm-cc/tree/main/.claude/skills/gsgrimoire-dnm-vtt).
+There is no copy here on purpose: two copies drift, and the first drift would be in the
+part that matters.
+
+Read it before changing anything. It carries the **versioning rule** (a number for a
+deliberate change, a letter for fixing what a release got wrong), the **deploy order**
+(this repo first, always) and the **trust boundary** (a check in the sender's own tab is
+not a control; `background.js` is the only writer of room metadata and therefore the only
+place a real check lives). All three have been got wrong at least once.
+
+The tests for both repos also live there, in `dnm-cc/tests/`. They stage a copy of this
+repo into `dnm-cc/out/dnm-obr` and import `dnm.js` directly, so a change here is covered by
+running them from the creator repo — not from this one.

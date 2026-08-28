@@ -27,6 +27,7 @@ import {
   ID, ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
+  createPoolBatcher,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -86,6 +87,11 @@ async function load() {
 // background page is the only writer of room metadata; see applyEvent in
 // dnm.js for why.
 async function announce(ev) {
+  // 0.9.7. Anything else going out ends a run of pool nudges first, so a roll cannot
+  // land in the log ahead of the presses that came before it. Re-entrant by design and
+  // harmless: the batcher clears `pending` before it calls send, so the flush this
+  // triggers from inside its own broadcast finds nothing to do.
+  poolBatch.flush();
   try {
     await OBR.broadcast.sendMessage(CHANNEL, ev, { destination: "ALL" });
   } catch (err) {
@@ -163,35 +169,47 @@ function keepPrivately(entry) {
   render();
 }
 
-async function stepPool(pool, delta) {
-  if (pool === "threat" && role !== "GM") return;
-  // Pool events are deltas, so they are not applied optimistically. Applying
-  // locally and then again from the GM's update would double count.
+// 0.9.7. One press no longer means one broadcast. stepPool() only counts; the batcher
+// decides when a run of presses has ended and hands the total here.
+//
+// v0.8.1: the roller's own +/- buttons were the last unlogged way to move a pool. The
+// sheet has logged its pool changes since v1.17, so a number moving with no entry
+// beside it meant someone had used these buttons — invisible, and exactly the
+// ambiguity the log exists to remove.
+//
+// The roller has no idea which character an Owlbear login is playing. It knows the
+// Owlbear display name and, when a token is selected, that token's character name.
+// Prefer the character, fall back to the login, and say plainly that it was a manual
+// adjustment so it is not mistaken for an ability. `who` is also the batcher's key, so
+// two people cannot have their nudges summed into one line.
+const poolBatch = createPoolBatcher(async ({ pool, delta, label }) => {
+  // Pool events are deltas, so they are not applied optimistically. Applying locally
+  // and then again from the GM's update would double count — which is why the display
+  // reads the batcher's peek() instead.
   await announce({ type: "pool", pool, delta });
-
-  // v0.8.1: the roller's own +/- buttons were the last unlogged way to move a pool.
-  // The sheet has logged its pool changes since v1.17, so a number moving with no
-  // entry beside it meant someone had used these buttons — invisible, and exactly the
-  // ambiguity the log exists to remove.
-  //
-  // The roller has no idea which character an Owlbear login is playing. It knows the
-  // Owlbear display name and, when a token is selected, that token's character name.
-  // Prefer the character, fall back to the login, and say plainly that it was a manual
-  // adjustment so it is not mistaken for an ability.
-  const who = (charEl.value || "").trim().slice(0, 24) || playerName;
   await announce({
     type: "action",
     entry: {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       t: Date.now(),
       kind: "action",
-      who,
+      who: label,
       label: "Manual adjustment",
       detail: `${delta > 0 ? "added" : "removed"} ${Math.abs(delta)} ${pool === "momentum" ? "Momentum" : "Threat"}`,
       pool,
       delta,
     },
   });
+  render();
+});
+
+function stepPool(pool, delta) {
+  if (pool === "threat" && role !== "GM") return;
+  const who = (charEl.value || "").trim().slice(0, 24) || playerName;
+  poolBatch.add(pool, delta, who);
+  // Redrawn now so the number answers the press. What it shows is committed plus
+  // uncounted, marked as unsettled until the room confirms it.
+  render();
 }
 
 // -------------------------------------------------------------
@@ -380,11 +398,21 @@ function updateHint() {
   hintEl.textContent = `Success on ${a} or under · Critical on ${s} or under · ${compText}`;
 }
 
+// A pool reads as committed + whatever the batcher is still holding, so the number
+// answers a press straight away. `unsettled` is the visual admission that the room has
+// not confirmed it yet — without it the display would be claiming more than it knows.
+function renderPool(pool, committed) {
+  const pendingDelta = poolBatch.peek(pool);
+  const node = el(`${pool}-value`);
+  node.textContent = Math.max(0, committed + pendingDelta);
+  node.classList.toggle("unsettled", pendingDelta !== 0);
+}
+
 function render() {
   applyCompAtButtons();
   updateHint();
-  el("momentum-value").textContent = state.momentum ?? 0;
-  el("threat-value").textContent = state.threat ?? 0;
+  renderPool("momentum", state.momentum ?? 0);
+  renderPool("threat", state.threat ?? 0);
   document.querySelectorAll('[data-pool="threat"]').forEach((b) => { b.disabled = role !== "GM"; });
 
   const merged = [...state.log, ...hiddenLog].sort((a, b) => b.t - a.t);
@@ -976,6 +1004,9 @@ async function startInOwlbear() {
   OBR.room.onMetadataChange((meta) => {
     const found = meta[KEY];
     state = found ? { ...structuredClone(EMPTY_STATE), ...found } : structuredClone(EMPTY_STATE);
+    // The room's own number has arrived, so what the batcher was promising is now
+    // real. Settled before the render, or the display would add it on twice.
+    poolBatch.settle();
     render();
     // The room's epochs are half of every party row's verdict, so a boundary press
     // moves every character from caught up to behind at once.
