@@ -264,7 +264,15 @@ export const MAX_BOND_EFFECTS = 12;
 // from a fight two weeks ago is worse than missing it.
 export const BOND_EFFECT_TTL_MS = 6 * 60 * 60 * 1000;
 
-const BOND_KINDS = new Set(["rivalry", "grant"]);
+// 0.9.8 adds "drive": the Maverick temperament's "when the GM spends 3 or more Threat
+// at once, regain 1 Spirit". It travels the same queue as the two bonds because it has
+// the same problem — it pays out on sheets that are shut.
+const BOND_KINDS = new Set(["rivalry", "grant", "drive"]);
+
+// The threshold in the Maverick drive's own text. Below 0.9.7 this was undetectable:
+// a GM spending 3 pressed - three times and it arrived as three spends of 1, so
+// "at once" had nothing to read. Coalescing is what made this possible at all.
+export const DRIVE_THREAT_SPEND_MIN = 3;
 
 // Bond names are free text typed during character creation, and the character names
 // they have to match are free text too. Case and stray spaces are the difference
@@ -293,6 +301,19 @@ export function sanitizeBondEffect(effect) {
     from: cleanText(effect.from, FIELD_LIMITS.who),
   };
   if (effect.kind === "rivalry") return base;
+
+  if (effect.kind === "drive") {
+    // No target: like a rivalry, every sheet decides for itself whether it is owed —
+    // here by reading its own temperament rather than its own bond list. `amount` is
+    // the size of the spend, carried only so the recipient's log can say what
+    // happened, and clamped like any other untrusted number.
+    return {
+      ...base,
+      drive: cleanText(effect.drive, FIELD_LIMITS.id),
+      amount: Math.max(0, Math.min(999, Math.round(Number(effect.amount) || 0))),
+    };
+  }
+
   const amount = Math.round(Number(effect.amount) || 0);
   return {
     ...base,
@@ -430,6 +451,12 @@ const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt"]);
 export function isGmOnlyEvent(ev) {
   if (!ev || typeof ev !== "object") return false;
   if (GM_ONLY_TYPES.has(ev.type)) return true;
+  // 0.9.8. The Maverick drive reads "when THE GM spends", so the announcement is the
+  // GM's to make. Unlike the two bonds — which a forged copy could only pay to someone
+  // who already holds the matching bond — a forged drive would reach every Maverick at
+  // the table on nobody's authority. It is cheap to put it behind the real check, so
+  // it goes behind the real check.
+  if (ev.type === "bond") return ev.effect?.kind === "drive";
   // Momentum is the group's pool and stays open to everyone, both directions.
   if (ev.type !== "pool" || ev.pool !== "threat") return false;
   return (Math.round(Number(ev.delta) || 0)) < 0;

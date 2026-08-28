@@ -27,7 +27,7 @@ import {
   ID, ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
-  createPoolBatcher,
+  createPoolBatcher, DRIVE_THREAT_SPEND_MIN,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -200,8 +200,37 @@ const poolBatch = createPoolBatcher(async ({ pool, delta, label }) => {
       delta,
     },
   });
+  announceThreatSpendDrive(pool, delta);
   render();
 });
+
+// 0.9.8. "When the GM spends 3 or more Threat at once, regain 1 Spirit" — the Maverick
+// drive. Announced from wherever the spend happened, because only that client knows a
+// run of presses was one decision; the room's metadata just shows a number that moved.
+//
+// Sent once for the whole table. Every sheet decides for itself whether it is a
+// Maverick, exactly as a rivalry bond has every sheet decide whether it holds the bond.
+// Role-checked here to stop an honest misclick, and GM-only in the reducer where it
+// actually counts.
+async function announceThreatSpendDrive(pool, delta) {
+  if (pool !== "threat" || role !== "GM") return;
+  if (delta > -DRIVE_THREAT_SPEND_MIN) return;
+  const spent = Math.abs(delta);
+  await announce({
+    type: "bond",
+    effect: {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      t: Date.now(),
+      kind: "drive",
+      drive: "maverick",
+      from: playerName,
+      amount: spent,
+    },
+  });
+  // The GM gets told too. A drive that fires silently on somebody else's sheet is
+  // exactly the thing the log exists to prevent.
+  setStatus(`Spent ${spent} Threat at once — every Maverick regains 1 Spirit.`);
+}
 
 function stepPool(pool, delta) {
   if (pool === "threat" && role !== "GM") return;
