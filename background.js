@@ -17,7 +17,8 @@
 // =============================================================
 
 import OBR from "./sdk.js";
-import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent } from "./dnm.js";
+import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
+  POPOUT_CHANNEL, POPOUT_PROTOCOL } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
 
@@ -183,8 +184,147 @@ async function setRelay(role) {
   }
 }
 
+// -------------------------------------------------------------
+// The popout relay host (0.9.9)
+// -------------------------------------------------------------
+// A character sheet opened in its own browser window has no route to Owlbear — see the
+// note on POPOUT_CHANNEL in dnm.js for why. This page is that route: it holds a working
+// SDK, it lives for the whole room session, and it is same-origin with the creator, so
+// a BroadcastChannel reaches it.
+//
+// The surface is deliberately NARROW rather than a general proxy of the SDK. Two
+// reasons. A generic proxy would have to ship functions across the channel — the
+// creator's token write is `scene.items.updateItems(ids, mutator)` and a mutator cannot
+// be structured-cloned — and a narrow surface is a contract you can read in one screen
+// and test without a live room. Everything the sheet actually needs is below.
+//
+// This is NOT a privilege boundary and must not be mistaken for one. A popout is the
+// same person's own browser; anything it asks for here, they could ask for by opening
+// the sheet normally. The real check stays where it has always been: relay(), which
+// verifies GM-only events against connection ids before anything is written.
+let popoutChannel = null;
+const popouts = new Map();      // popoutId -> last seen, ms
+const POPOUT_IDLE_MS = 60000;   // a window that has not spoken in a minute has gone
+
+function livePopouts() {
+  const cutoff = Date.now() - POPOUT_IDLE_MS;
+  for (const [id, seen] of popouts) if (seen < cutoff) popouts.delete(id);
+  return popouts.size;
+}
+
+function toPopouts(message) {
+  // Skipped entirely when nobody is listening. scene.items.onChange fires on every drag
+  // frame, and posting each one to an empty channel is work for nothing.
+  if (!popoutChannel || !livePopouts()) return;
+  popoutChannel.postMessage({ ...message, room: OBR.room.id, v: POPOUT_PROTOCOL });
+}
+
+async function handlePopoutRequest(msg) {
+  switch (msg.op) {
+    case "self": {
+      const [role, name, id] = await Promise.all([
+        OBR.player.getRole(), OBR.player.getName(), OBR.player.getId(),
+      ]);
+      return { role, name, id };
+    }
+    case "metadata":
+      return { metadata: await OBR.room.getMetadata() };
+    case "tokenCode": {
+      const items = await OBR.scene.items.getItems([msg.itemId]);
+      const stored = items && items[0] && items[0].metadata && items[0].metadata[CHAR_KEY];
+      return { code: stored && stored.code ? stored.code : null };
+    }
+    case "writeToken":
+      await OBR.scene.items.updateItems([msg.itemId], (items) => {
+        for (const it of items) it.metadata[CHAR_KEY] = { v: 1, code: msg.code };
+      });
+      return { ok: true };
+    case "clearToken":
+      await OBR.scene.items.updateItems([msg.itemId], (items) => {
+        for (const it of items) delete it.metadata[CHAR_KEY];
+      });
+      return { ok: true };
+    case "partyCodes": {
+      const all = await OBR.scene.items.getItems();
+      return {
+        codes: all
+          .filter((i) => typeof i.metadata?.[CHAR_KEY]?.code === "string" && i.metadata[CHAR_KEY].code)
+          .map((i) => ({ id: i.id, code: i.metadata[CHAR_KEY].code })),
+      };
+    }
+    case "broadcast":
+      // Fire and forget, exactly as the framed sheet does. It goes out over the normal
+      // channel, so the GM's relay() sees it as any other event and applies the same
+      // GM-only check — a popout gets no more say than the window it came from.
+      await OBR.broadcast.sendMessage(CHANNEL, msg.event, { destination: "ALL" });
+      return { ok: true };
+    default:
+      return { error: `unknown op: ${msg.op}` };
+  }
+}
+
+let popoutSubscribed = false;
+
+// Subscribed only once a popout has actually said hello. Every client in the room runs
+// this page, and most will never open one.
+function subscribePopoutFeeds() {
+  if (popoutSubscribed) return;
+  popoutSubscribed = true;
+  OBR.room.onMetadataChange((metadata) => { toPopouts({ event: "room", metadata }); });
+  OBR.player.onChange((player) => {
+    toPopouts({ event: "player", role: player.role, name: player.name, id: player.id });
+  });
+  let itemsTimer = null;
+  OBR.scene.items.onChange(() => {
+    // Debounced: this fires on every frame of a drag, and all the popout does with it
+    // is re-read a list of names.
+    clearTimeout(itemsTimer);
+    itemsTimer = setTimeout(() => toPopouts({ event: "items" }), 400);
+  });
+}
+
+function startPopoutHost() {
+  if (typeof BroadcastChannel !== "function") return;   // very old browser
+  popoutChannel = new BroadcastChannel(POPOUT_CHANNEL);
+  popoutChannel.onmessage = async (ev) => {
+    const msg = ev.data;
+    if (!msg || msg.dir !== "req") return;
+    // Two rooms open in one browser means two hosts on one channel. Without this both
+    // would answer, and the popout would act on whichever reply arrived first.
+    if (msg.room && msg.room !== OBR.room.id) return;
+    if (msg.v !== POPOUT_PROTOCOL) {
+      popoutChannel.postMessage({ dir: "res", id: msg.id, v: POPOUT_PROTOCOL, error: "protocol" });
+      return;
+    }
+    popouts.set(msg.from, Date.now());
+    if (msg.op === "hello") subscribePopoutFeeds();
+    if (msg.op === "bye") { popouts.delete(msg.from); return; }
+    let payload;
+    try {
+      payload = msg.op === "hello" || msg.op === "ping"
+        ? { ok: true, room: OBR.room.id }
+        : await handlePopoutRequest(msg);
+    } catch (err) {
+      console.warn("[dnm] popout request failed:", msg.op, err);
+      payload = null;
+      popoutChannel.postMessage({
+        dir: "res", id: msg.id, v: POPOUT_PROTOCOL,
+        error: String((err && err.message) || err),
+      });
+      return;
+    }
+    // The answer is NESTED rather than spread into the envelope. Spreading it looked
+    // tidier and was wrong: the reply to "self" carries the player's `id`, which
+    // overwrote the envelope's correlation `id` — so the popout could never match the
+    // response to its request and hung on every read. Caught by popout.test.mjs before
+    // it ever reached a room, and the reason the envelope's fields are now reserved.
+    popoutChannel.postMessage({ dir: "res", id: msg.id, v: POPOUT_PROTOCOL, data: payload });
+  };
+}
+
 OBR.onReady(async () => {
   setupContextMenu();
+  startPopoutHost();
   await setRelay(await OBR.player.getRole());
   // The role can change mid-session if the room owner promotes someone.
   OBR.player.onChange((player) => { setRelay(player.role); });

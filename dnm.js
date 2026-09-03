@@ -5,6 +5,34 @@
 
 export const ID = "com.thuknights.dnm-obr";
 export const CHAR_KEY = `${ID}/char`;
+
+// -------------------------------------------------------------
+// The popout relay (0.9.9)
+// -------------------------------------------------------------
+// A character sheet in its own browser window cannot reach Owlbear. The SDK talks to
+// the host through `window.parent.postMessage` and refuses to send anything until the
+// parent completes an OBR_READY handshake — a window opened with window.open() is its
+// own top-level context, so `window.parent` is itself, the handshake never arrives and
+// every call throws "not ready". That is not something a page can work around from the
+// inside; it needs a courier.
+//
+// The courier is a BroadcastChannel. Both halves are published from
+// gsgrimoire.github.io — the creator under /dnm-cc/ and this extension under /dnm-obr/
+// — and an origin is scheme, host and port, so despite the different paths they are
+// the SAME ORIGIN and can share a channel.
+//
+// The host is background.js, chosen because it is the one extension page that lives for
+// the whole room session. The obvious alternative, the modal that opened the popout, is
+// exactly the window the user is about to close.
+//
+// Scoped by room id: one browser can have two rooms open, and without the scope both
+// their background pages would answer the same popout.
+export const POPOUT_CHANNEL = `${ID}/popout`;
+
+// Bumped when the message shapes change. A popout and a host from different releases
+// can meet — the creator and the extension are deployed separately — and the honest
+// failure is "this window is out of date, reopen it" rather than a half-working sheet.
+export const POPOUT_PROTOCOL = 1;
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
