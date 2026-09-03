@@ -322,7 +322,9 @@ function applyCompAtButtons() {
 // refused.
 async function claimMomentum(entry) {
   if (!entry || entry.claimed || !(entry.gain > 0)) return;
-  if (role !== "GM" && entry.by !== myPlayerId) return;
+  // 0.9.8B: `!entry.by` — see renderEntry. A roll nobody is recorded as having made
+  // must not be a roll nobody can claim.
+  if (role !== "GM" && entry.by && entry.by !== myPlayerId) return;
   await announce({ type: "claim", id: entry.id });
   await announce({ type: "pool", pool: "momentum", delta: entry.gain });
   await announce({
@@ -579,7 +581,13 @@ function renderRollEntry(e) {
   if (e.gain > 0) {
     const claim = document.createElement("button");
     claim.className = "mini claim-momentum";
-    const mine = role === "GM" || e.by === myPlayerId;
+    // 0.9.8B. An entry with no `by` is unattributable — every roll made from a
+    // character sheet before v1.28B is one of these, and there will be some sitting in
+    // live rooms for a while yet. Offering it to nobody but the GM is what the bug
+    // looked like from a player's seat, so an unstamped roll is open to anyone: the
+    // pool is the group's, the claim is one-way and idempotent, and refusing it helps
+    // no one.
+    const mine = role === "GM" || !e.by || e.by === myPlayerId;
     claim.disabled = !!e.claimed || !mine;
     claim.textContent = e.claimed ? `+${e.gain} Momentum taken` : `Add ${e.gain} Momentum`;
     claim.title = e.claimed
