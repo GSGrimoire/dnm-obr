@@ -18,7 +18,7 @@
 
 import OBR from "./sdk.js";
 import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
-  POPOUT_CHANNEL, POPOUT_PROTOCOL } from "./dnm.js";
+  POPOUT_CHANNEL, POPOUT_PROTOCOL, EXT_VERSION } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
 
@@ -225,7 +225,7 @@ async function handlePopoutRequest(msg) {
       const [role, name, id] = await Promise.all([
         OBR.player.getRole(), OBR.player.getName(), OBR.player.getId(),
       ]);
-      return { role, name, id };
+      return { role, name, id, hasGM: await roomHasGM(role) };
     }
     case "metadata":
       return { metadata: await OBR.room.getMetadata() };
@@ -263,6 +263,32 @@ async function handlePopoutRequest(msg) {
   }
 }
 
+// -------------------------------------------------------------
+// Is anyone the GM? (0.9.10)
+// -------------------------------------------------------------
+// Reported from play: in a room with no GM, a player can press + on Momentum, the sheet
+// moves, and the pool never does. That is this file working as designed — persist() only
+// runs on the GM's client, so with no GM nobody writes room metadata and every pool
+// change is dropped on the floor.
+//
+// It is not worth changing that. The single-writer rule is what stops two clients
+// clobbering each other, and a table with no GM is not a table playing. What was wrong
+// is that it happened SILENTLY, so the sheet looked broken rather than unattended.
+//
+// getPlayers() lists everyone EXCEPT this client, which is why the caller's own role has
+// to be passed in — without it a lone GM would be told there is no GM.
+async function roomHasGM(ownRole) {
+  if (ownRole === "GM") return true;
+  try {
+    const players = await OBR.party.getPlayers();
+    return players.some((p) => p.role === "GM");
+  } catch (err) {
+    // Failing OPEN. A transient party read should not put a warning on every sheet at
+    // the table saying the GM has vanished.
+    return true;
+  }
+}
+
 let popoutSubscribed = false;
 
 // Subscribed only once a popout has actually said hello. Every client in the room runs
@@ -271,8 +297,18 @@ function subscribePopoutFeeds() {
   if (popoutSubscribed) return;
   popoutSubscribed = true;
   OBR.room.onMetadataChange((metadata) => { toPopouts({ event: "room", metadata }); });
-  OBR.player.onChange((player) => {
-    toPopouts({ event: "player", role: player.role, name: player.name, id: player.id });
+  OBR.player.onChange(async (player) => {
+    toPopouts({
+      event: "player", role: player.role, name: player.name, id: player.id,
+      hasGM: await roomHasGM(player.role),
+    });
+  });
+  // 0.9.10. A room with no GM writes no metadata at all — see the note on roomHasGM —
+  // so a popout has to hear about someone's role changing, not only its own.
+  OBR.party.onChange(async () => {
+    try {
+      toPopouts({ event: "party", hasGM: await roomHasGM(await OBR.player.getRole()) });
+    } catch (err) { /* the party read raced a disconnect */ }
   });
   let itemsTimer = null;
   OBR.scene.items.onChange(() => {
@@ -289,9 +325,12 @@ function startPopoutHost() {
   popoutChannel.onmessage = async (ev) => {
     const msg = ev.data;
     if (!msg || msg.dir !== "req") return;
-    // Two rooms open in one browser means two hosts on one channel. Without this both
-    // would answer, and the popout would act on whichever reply arrived first.
-    if (msg.room && msg.room !== OBR.room.id) return;
+    // Two rooms open in one browser means two hosts on one channel, and without a scope
+    // both would answer. But "hello" is answered REGARDLESS (0.9.10): a silent drop here
+    // is indistinguishable from an extension that has no relay at all, and that
+    // ambiguity cost a QA round. Answering lets the window say which room replied and
+    // what version it is running, so a mismatch reports itself.
+    if (msg.op !== "hello" && msg.room && msg.room !== OBR.room.id) return;
     if (msg.v !== POPOUT_PROTOCOL) {
       popoutChannel.postMessage({ dir: "res", id: msg.id, v: POPOUT_PROTOCOL, error: "protocol" });
       return;
@@ -302,7 +341,7 @@ function startPopoutHost() {
     let payload;
     try {
       payload = msg.op === "hello" || msg.op === "ping"
-        ? { ok: true, room: OBR.room.id }
+        ? { ok: true, room: OBR.room.id, ext: EXT_VERSION }
         : await handlePopoutRequest(msg);
     } catch (err) {
       console.warn("[dnm] popout request failed:", msg.op, err);

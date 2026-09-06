@@ -144,6 +144,24 @@ button:disabled { opacity: .25; cursor: not-allowed; }
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
+/* 0.9.10. The Complication clause on its own line. It wrapped to two lines anyway, so
+   the break is put where it reads. */
+.rule-hint-comp { display: block; }
+/* Threat's colour, because a raised Complication range IS extra danger — the same thing
+   Threat measures — and a player who misses the change plays on the wrong odds. */
+.rule-hint-comp.raised { color: var(--accent); }
+
+/* 0.9.10. Warning colour rather than Threat's orange: nothing is wrong with the game,
+   something is missing from the room. */
+.no-gm {
+  background: rgba(255, 209, 102, 0.12);
+  border: 1px solid var(--warning);
+  border-radius: 4px;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 8px 10px;
+}
 
 .segmented { display: flex; gap: 2px; }
 .segmented button { flex: 1; padding: 5px 0; font-family: var(--font-mono); font-size: 12px; }

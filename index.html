@@ -13,6 +13,15 @@
 
 <div id="app">
 
+  <!-- 0.9.10. Reported from play: in a room with no GM, a player presses + on Momentum,
+       the sheet moves and the pool never does. That is the design working — only the
+       GM's background page writes room metadata, so with no GM nobody writes anything
+       and every pool change is dropped. The single-writer rule is what stops two
+       clients clobbering each other and is worth keeping; what was wrong is that it
+       failed SILENTLY, so the tools looked broken rather than unattended. -->
+  <p id="no-gm" class="no-gm" hidden>No GM in this room. Rolls still show, but Momentum,
+    Threat and the shared log will not save until a GM joins.</p>
+
   <section class="pools">
     <div class="pool">
       <span class="pool-label">Momentum</span>

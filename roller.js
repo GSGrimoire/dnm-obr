@@ -37,6 +37,7 @@ let role = "PLAYER";
 let playerName = "Someone";
 let myPlayerId = null;   // whose hidden rolls this client may read in full
 let standalone = false;
+let hasGM = true;   // fails OPEN: a transient party read must not cry wolf
 let hiddenLog = [];
 let concealMode = "open";   // "open" | "hidden" | "secret"
 let diceCount = 2;
@@ -72,6 +73,31 @@ const clearBtn = el("clear-log");
 const gmPanel = el("gm-panel");
 const partyPanel = el("party-panel");
 const partyListEl = el("party-list");
+const noGmEl = el("no-gm");
+
+// 0.9.10. Reported from play: in a room with no GM, a player presses + on Momentum,
+// the sheet moves and the pool never does. That is background.js working as designed —
+// only the GM's client writes room metadata, so with no GM nobody writes and every pool
+// change is dropped. The single-writer rule is what stops two clients clobbering each
+// other and is worth keeping; what was wrong is that it failed SILENTLY.
+//
+// getPlayers() lists everyone EXCEPT this client, so this client's own role has to be
+// checked separately — without it a lone GM would be told there is no GM.
+async function refreshHasGM() {
+  if (standalone) { hasGM = true; }
+  else if (role === "GM") { hasGM = true; }
+  else {
+    try {
+      const players = await OBR.party.getPlayers();
+      hasGM = players.some((p) => p.role === "GM");
+    } catch (err) {
+      // Failing open. A party read that races a disconnect must not put a warning on
+      // every panel at the table saying the GM has vanished.
+      hasGM = true;
+    }
+  }
+  if (noGmEl) noGmEl.hidden = hasGM || standalone;
+}
 
 // -------------------------------------------------------------
 // Shared state
@@ -423,10 +449,24 @@ function updateHint() {
   const compAt = readCompAt(state);
   // Named explicitly rather than left at "20": once the GM lowers it, a player reading
   // the old line would be working from the wrong odds.
-  const compText = compAt >= COMP_AT_MAX
-    ? "Complication on 20"
-    : `Complication on ${compAt}+ (GM raised the danger)`;
-  hintEl.textContent = `Success on ${a} or under · Critical on ${s} or under · ${compText}`;
+  // 0.9.10. Two lines, always broken in the same place. It wrapped to two lines anyway
+  // at this width, so the break is put somewhere it reads rather than wherever the box
+  // happened to run out — and a RAISED danger is drawn in the Threat colour, because a
+  // player who does not notice the change is playing on the wrong odds.
+  hintEl.textContent = "";
+  const base = document.createElement("span");
+  base.textContent = `Success on ${a} or under · Critical on ${s} or under`;
+  hintEl.append(base);
+
+  const comp = document.createElement("span");
+  comp.className = "rule-hint-comp";
+  if (compAt >= COMP_AT_MAX) {
+    comp.textContent = "Complication on 20";
+  } else {
+    comp.classList.add("raised");
+    comp.textContent = `Complication on ${compAt}+ (GM raised the danger)`;
+  }
+  hintEl.append(comp);
 }
 
 // A pool reads as committed + whatever the batcher is still holding, so the number
@@ -989,6 +1029,7 @@ async function startInOwlbear() {
   if (!charEl.value) charEl.value = playerName;
   applyRole();
   wireGmPanel();
+  await refreshHasGM();
 
   await load();
   render();
@@ -1014,8 +1055,13 @@ async function startInOwlbear() {
     // just changed. Clearing it forces one pass.
     partySignature = null;
     refreshParty();
+    refreshHasGM();
     render();
   });
+
+  // 0.9.10. Someone else being promoted or leaving changes whether the room has a GM,
+  // and player.onChange only reports THIS client.
+  OBR.party.onChange(() => { refreshHasGM(); });
 
   // Fires on every item change including drags. refreshParty() is signature-guarded
   // precisely because of this: a move changes no code and no epoch, so it costs a

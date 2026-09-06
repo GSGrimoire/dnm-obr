@@ -33,6 +33,13 @@ export const POPOUT_CHANNEL = `${ID}/popout`;
 // can meet — the creator and the extension are deployed separately — and the honest
 // failure is "this window is out of date, reopen it" rather than a half-working sheet.
 export const POPOUT_PROTOCOL = 1;
+
+// Reported to a popped-out window in the reply to "hello". Change it with the version
+// in manifest.json — it exists so a window that cannot reach the room can say WHY, and
+// the likeliest why is a room still running the extension it loaded this morning.
+// Owlbear caches the background page for the room session, so a tab refresh is not
+// always enough; the room has to be reloaded.
+export const EXT_VERSION = "0.9.10";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
