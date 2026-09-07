@@ -30,9 +30,15 @@ style.css          sdk.js
 built — see **Third-party code** below for why it is not fetched at runtime.
 
 `sheet.html`, `sheet.js`, `sheet.css`, `rules.js` and `build-rules.mjs` were the
-duplicate-sheet approach and were **deleted at 0.7.0**, when the modal switched to
+duplicate-sheet approach and were **deleted at 0.7.0**, when the sheet switched to
 opening the published character creator instead. This list was stale until 0.9.0.
 Nothing should reintroduce a local sheet page.
+
+Since **1.0** the sheet opens as a docked popover rather than a centred modal, so the map
+and the log stay usable beside it. Both openers — the roller's party list and the token
+context menu — go through `openSheetPopover()` in `dnm.js`. The BroadcastChannel relay
+added in 0.9.9, for a sheet in its own browser window, was **deleted at 1.0**: it never
+once connected. See the note in `dnm.js` before considering rebuilding it.
 
 You can drag them into the GitHub web uploader. Nothing needs installing locally.
 

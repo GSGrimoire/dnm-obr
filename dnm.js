@@ -1,45 +1,164 @@
 // =============================================================
 // Shared Dreams & Machines helpers
-// Used by both the roller popover and the character sheet modal.
+// Used by both the roller popover and the docked character sheet.
 // =============================================================
 
 export const ID = "com.thuknights.dnm-obr";
 export const CHAR_KEY = `${ID}/char`;
 
 // -------------------------------------------------------------
-// The popout relay (0.9.9)
+// The docked sheet (1.0)
 // -------------------------------------------------------------
-// A character sheet in its own browser window cannot reach Owlbear. The SDK talks to
-// the host through `window.parent.postMessage` and refuses to send anything until the
-// parent completes an OBR_READY handshake — a window opened with window.open() is its
-// own top-level context, so `window.parent` is itself, the handshake never arrives and
-// every call throws "not ready". That is not something a page can work around from the
-// inside; it needs a courier.
+// The sheet used to open as OBR.modal, which is centred, fixed and backdropped: to see
+// the map or the log you had to close it, and to roll again you had to reopen it. That
+// is the whole evening, and it is what 1.0 is for.
 //
-// The courier is a BroadcastChannel. Both halves are published from
-// gsgrimoire.github.io — the creator under /dnm-cc/ and this extension under /dnm-obr/
-// — and an origin is scheme, host and port, so despite the different paths they are
-// the SAME ORIGIN and can share a channel.
+// 0.9.9 tried to solve it with a separate browser window and a BroadcastChannel courier.
+// It never once connected, and the likeliest reason is Chrome partitioning storage by
+// top-level site: the extension is a third-party frame under owlbear.rodeo and a
+// window.open()ed sheet is first-party on gsgrimoire.github.io, so their channels sit in
+// different partitions. The whole relay is gone as of 1.0. Do not rebuild it.
 //
-// The host is background.js, chosen because it is the one extension page that lives for
-// the whole room session. The obvious alternative, the modal that opened the popout, is
-// exactly the window the user is about to close.
+// A popover is the route that works, and it is better than the window ever would have
+// been: a popover is still FRAMED BY OWLBEAR, so the sheet keeps a working SDK and needs
+// no courier at all.
 //
-// Scoped by room id: one browser can have two rooms open, and without the scope both
-// their background pages would answer the same popout.
-export const POPOUT_CHANNEL = `${ID}/popout`;
+// The one thing a popover cannot do is move. PopoverApi is open/close/getWidth/setWidth/
+// getHeight/setHeight — there is no setPosition, and anchorPosition is read once at open.
+// So size changes are live and free, and a position change costs a close and reopen,
+// which reloads the sheet. That is why the sheet offers three SNAP SIDES rather than a
+// drag: a deliberate press that reloads is honest, a drag that reloads on every frame is
+// not.
+// Not `${ID}/sheet` — that id is already the token context menu item, and sharing a
+// string between two unrelated Owlbear registries is a collision waiting for the
+// release that makes them one namespace.
+export const SHEET_POPOVER_ID = `${ID}/sheet-panel`;
 
-// Bumped when the message shapes change. A popout and a host from different releases
-// can meet — the creator and the extension are deployed separately — and the honest
-// failure is "this window is out of date, reopen it" rather than a half-working sheet.
-export const POPOUT_PROTOCOL = 1;
+// Closed on sight alongside the popover whenever the sheet closes itself. A room that
+// was already open when 1.0 deployed still has the old modal on screen, and Owlbear
+// caches the background page for the whole room session — so for one session the thing
+// being closed may well be a modal. Closing an id that is not open is a no-op, and
+// -beta is here because the beta background page used its own id.
+export const SHEET_MODAL_IDS = [`${ID}/sheet-modal`, `${ID}/sheet-modal-beta`];
 
-// Reported to a popped-out window in the reply to "hello". Change it with the version
-// in manifest.json — it exists so a window that cannot reach the room can say WHY, and
-// the likeliest why is a room still running the extension it loaded this morning.
-// Owlbear caches the background page for the room session, so a tab refresh is not
-// always enough; the room has to be reloaded.
-export const EXT_VERSION = "0.9.10";
+export const DOCK_SIDES = ["right", "left", "bottom"];
+
+// Width for a side dock, height for the bottom one; the other axis fills the viewport.
+// 560 is wide enough for the play view's two columns without eating the map.
+export const DOCK_DEFAULT = { side: "right", width: 560, height: 420 };
+export const DOCK_LIMITS = { width: [380, 1280], height: [260, 1000] };
+
+// The viewport is asked for at open time and can fail or read zero before the scene is
+// up. Falling back to a plausible desktop is better than a popover positioned at 0,0.
+export const DOCK_FALLBACK_VIEWPORT = { width: 1600, height: 900 };
+
+const clampTo = ([lo, hi], n, fallback) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.round(v)));
+};
+
+// Anything reaching this has been through localStorage, which any page on the origin
+// can write and a user can edit by hand. Clamp on the way OUT, the same rule the
+// character code follows.
+export function clampDock(dock) {
+  const d = dock && typeof dock === "object" ? dock : {};
+  return {
+    side: DOCK_SIDES.includes(d.side) ? d.side : DOCK_DEFAULT.side,
+    width: clampTo(DOCK_LIMITS.width, d.width, DOCK_DEFAULT.width),
+    height: clampTo(DOCK_LIMITS.height, d.height, DOCK_DEFAULT.height),
+  };
+}
+
+// A viewport smaller than the dock is not hypothetical — a laptop in a browser window
+// on half a screen — so the dock never claims more than three quarters of it.
+function fitViewport(viewport) {
+  const w = Number(viewport && viewport.width);
+  const h = Number(viewport && viewport.height);
+  return {
+    width: Number.isFinite(w) && w > 0 ? Math.round(w) : DOCK_FALLBACK_VIEWPORT.width,
+    height: Number.isFinite(h) && h > 0 ? Math.round(h) : DOCK_FALLBACK_VIEWPORT.height,
+  };
+}
+
+// The full OBR.popover.open argument, as a pure function so it can be tested without a
+// room. transformOrigin is the corner of the POPOVER placed on the anchor point, which
+// is what pins the dock to its edge: a right dock pinned by its right corner grows
+// leftwards when setWidth is called, instead of walking off the screen.
+//
+// marginThreshold is MUI's minimum gap to the window edge and defaults to 16. A dock
+// that stops 16px short of the edge looks like a mistake, so it is zero here.
+export function sheetPopover({ url, dock, viewport }) {
+  const d = clampDock(dock);
+  const v = fitViewport(viewport);
+  const geometry = {
+    right: {
+      width: Math.min(d.width, Math.round(v.width * 0.75)),
+      height: v.height,
+      anchorPosition: { left: v.width, top: 0 },
+      transformOrigin: { horizontal: "RIGHT", vertical: "TOP" },
+    },
+    left: {
+      width: Math.min(d.width, Math.round(v.width * 0.75)),
+      height: v.height,
+      anchorPosition: { left: 0, top: 0 },
+      transformOrigin: { horizontal: "LEFT", vertical: "TOP" },
+    },
+    bottom: {
+      width: v.width,
+      height: Math.min(d.height, Math.round(v.height * 0.75)),
+      anchorPosition: { left: 0, top: v.height },
+      transformOrigin: { horizontal: "LEFT", vertical: "BOTTOM" },
+    },
+  }[d.side];
+
+  return {
+    id: SHEET_POPOVER_ID,
+    url,
+    width: geometry.width,
+    height: geometry.height,
+    anchorReference: "POSITION",
+    anchorPosition: geometry.anchorPosition,
+    anchorOrigin: { horizontal: "LEFT", vertical: "TOP" },
+    transformOrigin: geometry.transformOrigin,
+    // Without this, the first click on the map dismisses the sheet — which is exactly
+    // the behaviour 1.0 exists to get rid of.
+    disableClickAway: true,
+    marginThreshold: 0,
+  };
+}
+
+// The sheet writes this when you press a dock button; the roller and the context menu
+// read it so the next sheet opens where you left the last one. Both halves are served
+// from gsgrimoire.github.io, and an origin is scheme, host and port, so /dnm-cc/ and
+// /dnm-obr/ share one localStorage. That is the same same-origin fact the relay was
+// built on — it was always true, it just could not carry a BroadcastChannel across a
+// storage partition.
+export const DOCK_KEY = `${ID}/dock`;
+
+export function readDock(storage) {
+  try {
+    return clampDock(JSON.parse(storage.getItem(DOCK_KEY)));
+  } catch (err) {
+    return clampDock(null);
+  }
+}
+
+export function writeDock(storage, dock) {
+  const d = clampDock(dock);
+  try {
+    storage.setItem(DOCK_KEY, JSON.stringify(d));
+  } catch (err) {
+    /* private mode, or a full quota: the dock just does not persist */
+  }
+  return d;
+}
+
+// The extension version in a place JavaScript can read. Its only consumer since 1.0 is
+// dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
+// it, because the manifest is the file everyone forgets on a release. Change both
+// together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
+export const EXT_VERSION = "1.0";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
@@ -748,3 +867,25 @@ export function shutDownAttrs(snap, char) {
 }
 
 export const clamp = (n, lo, hi) => (Number.isNaN(n) ? lo : Math.min(hi, Math.max(lo, n)));
+
+// Both openers — the roller's party list and the token context menu — go through this,
+// so the sheet cannot end up opened two different ways. Takes OBR as an argument rather
+// than importing it: this file is deliberately SDK-free so the test suites can load it
+// in plain node.
+export const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/";
+
+export async function openSheetPopover(obr, itemId, storage) {
+  let viewport = null;
+  try {
+    const [width, height] = await Promise.all([
+      obr.viewport.getWidth(), obr.viewport.getHeight(),
+    ]);
+    viewport = { width, height };
+  } catch (err) {
+    // Before a scene is up this can throw or read zero. sheetPopover() falls back.
+    viewport = null;
+  }
+  const dock = storage ? readDock(storage) : clampDock(null);
+  const url = `${SHEET_URL}?item=${encodeURIComponent(itemId)}`;
+  await obr.popover.open(sheetPopover({ url, dock, viewport }));
+}

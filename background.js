@@ -6,7 +6,7 @@
 // instead, which is where the menu registration belongs.
 //
 // v0.7.0: this file is the former background-beta.js, promoted. The beta
-// approach — the modal opens the published character creator rather than a
+// approach — the sheet opens the published character creator rather than a
 // second sheet implementation in this repo — is now the only approach, so the
 // "-beta" id suffixes and the "(beta)" menu labels are gone.
 //
@@ -18,19 +18,20 @@
 
 import OBR from "./sdk.js";
 import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
-  POPOUT_CHANNEL, POPOUT_PROTOCOL, EXT_VERSION } from "./dnm.js";
+  openSheetPopover } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
 
-// The directory URL, not a filename. dnm-cc publishes the creator as index.html,
-// so pointing at dnm-character-creator.html 404s — and hardcoding any filename
-// makes this break again the day the file is renamed. The folder root always
-// resolves to whatever index.html is there.
-//
-// From creator v1.14 the creator is a single file that renders itself
-// differently depending on whether it is framed, so this is the normal
-// published URL rather than a separate embed copy.
-const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/";
+// localStorage throws outright in a frame whose cookies are blocked, rather than
+// returning null, so every read of it goes through this. No dock preference simply
+// means the default one.
+function safeStorage() {
+  try {
+    return window.localStorage;
+  } catch (err) {
+    return null;
+  }
+}
 
 function setupContextMenu() {
   OBR.contextMenu.create({
@@ -60,16 +61,12 @@ function setupContextMenu() {
     onClick(context) {
       const item = context.items[0];
       if (!item) return;
-      // Windowed rather than full screen so the map stays visible behind it.
-      // Owlbear modals are centred and fixed; the API exposes size but no
-      // position or drag, so this is as close to a movable window as we get.
-      OBR.modal.open({
-        id: `${ID}/sheet-modal`,
-        url: `${SHEET_URL}?item=${encodeURIComponent(item.id)}`,
-        // Taller than the old local sheet: the creator's play view is a long
-        // vertical document rather than a fitted dashboard.
-        width: 1280,
-        height: 940,
+      // 1.0: a docked popover rather than a centred modal, so the map and the log stay
+      // visible and clickable beside the sheet instead of behind it. The side and size
+      // come from localStorage, which the sheet writes when you press a dock button, so
+      // this opens where you left the last one. See the note in dnm.js.
+      openSheetPopover(OBR, item.id, safeStorage()).catch((err) => {
+        console.error("[dnm] could not open the sheet", err);
       });
     },
   });
@@ -184,186 +181,8 @@ async function setRelay(role) {
   }
 }
 
-// -------------------------------------------------------------
-// The popout relay host (0.9.9)
-// -------------------------------------------------------------
-// A character sheet opened in its own browser window has no route to Owlbear — see the
-// note on POPOUT_CHANNEL in dnm.js for why. This page is that route: it holds a working
-// SDK, it lives for the whole room session, and it is same-origin with the creator, so
-// a BroadcastChannel reaches it.
-//
-// The surface is deliberately NARROW rather than a general proxy of the SDK. Two
-// reasons. A generic proxy would have to ship functions across the channel — the
-// creator's token write is `scene.items.updateItems(ids, mutator)` and a mutator cannot
-// be structured-cloned — and a narrow surface is a contract you can read in one screen
-// and test without a live room. Everything the sheet actually needs is below.
-//
-// This is NOT a privilege boundary and must not be mistaken for one. A popout is the
-// same person's own browser; anything it asks for here, they could ask for by opening
-// the sheet normally. The real check stays where it has always been: relay(), which
-// verifies GM-only events against connection ids before anything is written.
-let popoutChannel = null;
-const popouts = new Map();      // popoutId -> last seen, ms
-const POPOUT_IDLE_MS = 60000;   // a window that has not spoken in a minute has gone
-
-function livePopouts() {
-  const cutoff = Date.now() - POPOUT_IDLE_MS;
-  for (const [id, seen] of popouts) if (seen < cutoff) popouts.delete(id);
-  return popouts.size;
-}
-
-function toPopouts(message) {
-  // Skipped entirely when nobody is listening. scene.items.onChange fires on every drag
-  // frame, and posting each one to an empty channel is work for nothing.
-  if (!popoutChannel || !livePopouts()) return;
-  popoutChannel.postMessage({ ...message, room: OBR.room.id, v: POPOUT_PROTOCOL });
-}
-
-async function handlePopoutRequest(msg) {
-  switch (msg.op) {
-    case "self": {
-      const [role, name, id] = await Promise.all([
-        OBR.player.getRole(), OBR.player.getName(), OBR.player.getId(),
-      ]);
-      return { role, name, id, hasGM: await roomHasGM(role) };
-    }
-    case "metadata":
-      return { metadata: await OBR.room.getMetadata() };
-    case "tokenCode": {
-      const items = await OBR.scene.items.getItems([msg.itemId]);
-      const stored = items && items[0] && items[0].metadata && items[0].metadata[CHAR_KEY];
-      return { code: stored && stored.code ? stored.code : null };
-    }
-    case "writeToken":
-      await OBR.scene.items.updateItems([msg.itemId], (items) => {
-        for (const it of items) it.metadata[CHAR_KEY] = { v: 1, code: msg.code };
-      });
-      return { ok: true };
-    case "clearToken":
-      await OBR.scene.items.updateItems([msg.itemId], (items) => {
-        for (const it of items) delete it.metadata[CHAR_KEY];
-      });
-      return { ok: true };
-    case "partyCodes": {
-      const all = await OBR.scene.items.getItems();
-      return {
-        codes: all
-          .filter((i) => typeof i.metadata?.[CHAR_KEY]?.code === "string" && i.metadata[CHAR_KEY].code)
-          .map((i) => ({ id: i.id, code: i.metadata[CHAR_KEY].code })),
-      };
-    }
-    case "broadcast":
-      // Fire and forget, exactly as the framed sheet does. It goes out over the normal
-      // channel, so the GM's relay() sees it as any other event and applies the same
-      // GM-only check — a popout gets no more say than the window it came from.
-      await OBR.broadcast.sendMessage(CHANNEL, msg.event, { destination: "ALL" });
-      return { ok: true };
-    default:
-      return { error: `unknown op: ${msg.op}` };
-  }
-}
-
-// -------------------------------------------------------------
-// Is anyone the GM? (0.9.10)
-// -------------------------------------------------------------
-// Reported from play: in a room with no GM, a player can press + on Momentum, the sheet
-// moves, and the pool never does. That is this file working as designed — persist() only
-// runs on the GM's client, so with no GM nobody writes room metadata and every pool
-// change is dropped on the floor.
-//
-// It is not worth changing that. The single-writer rule is what stops two clients
-// clobbering each other, and a table with no GM is not a table playing. What was wrong
-// is that it happened SILENTLY, so the sheet looked broken rather than unattended.
-//
-// getPlayers() lists everyone EXCEPT this client, which is why the caller's own role has
-// to be passed in — without it a lone GM would be told there is no GM.
-async function roomHasGM(ownRole) {
-  if (ownRole === "GM") return true;
-  try {
-    const players = await OBR.party.getPlayers();
-    return players.some((p) => p.role === "GM");
-  } catch (err) {
-    // Failing OPEN. A transient party read should not put a warning on every sheet at
-    // the table saying the GM has vanished.
-    return true;
-  }
-}
-
-let popoutSubscribed = false;
-
-// Subscribed only once a popout has actually said hello. Every client in the room runs
-// this page, and most will never open one.
-function subscribePopoutFeeds() {
-  if (popoutSubscribed) return;
-  popoutSubscribed = true;
-  OBR.room.onMetadataChange((metadata) => { toPopouts({ event: "room", metadata }); });
-  OBR.player.onChange(async (player) => {
-    toPopouts({
-      event: "player", role: player.role, name: player.name, id: player.id,
-      hasGM: await roomHasGM(player.role),
-    });
-  });
-  // 0.9.10. A room with no GM writes no metadata at all — see the note on roomHasGM —
-  // so a popout has to hear about someone's role changing, not only its own.
-  OBR.party.onChange(async () => {
-    try {
-      toPopouts({ event: "party", hasGM: await roomHasGM(await OBR.player.getRole()) });
-    } catch (err) { /* the party read raced a disconnect */ }
-  });
-  let itemsTimer = null;
-  OBR.scene.items.onChange(() => {
-    // Debounced: this fires on every frame of a drag, and all the popout does with it
-    // is re-read a list of names.
-    clearTimeout(itemsTimer);
-    itemsTimer = setTimeout(() => toPopouts({ event: "items" }), 400);
-  });
-}
-
-function startPopoutHost() {
-  if (typeof BroadcastChannel !== "function") return;   // very old browser
-  popoutChannel = new BroadcastChannel(POPOUT_CHANNEL);
-  popoutChannel.onmessage = async (ev) => {
-    const msg = ev.data;
-    if (!msg || msg.dir !== "req") return;
-    // Two rooms open in one browser means two hosts on one channel, and without a scope
-    // both would answer. But "hello" is answered REGARDLESS (0.9.10): a silent drop here
-    // is indistinguishable from an extension that has no relay at all, and that
-    // ambiguity cost a QA round. Answering lets the window say which room replied and
-    // what version it is running, so a mismatch reports itself.
-    if (msg.op !== "hello" && msg.room && msg.room !== OBR.room.id) return;
-    if (msg.v !== POPOUT_PROTOCOL) {
-      popoutChannel.postMessage({ dir: "res", id: msg.id, v: POPOUT_PROTOCOL, error: "protocol" });
-      return;
-    }
-    popouts.set(msg.from, Date.now());
-    if (msg.op === "hello") subscribePopoutFeeds();
-    if (msg.op === "bye") { popouts.delete(msg.from); return; }
-    let payload;
-    try {
-      payload = msg.op === "hello" || msg.op === "ping"
-        ? { ok: true, room: OBR.room.id, ext: EXT_VERSION }
-        : await handlePopoutRequest(msg);
-    } catch (err) {
-      console.warn("[dnm] popout request failed:", msg.op, err);
-      payload = null;
-      popoutChannel.postMessage({
-        dir: "res", id: msg.id, v: POPOUT_PROTOCOL,
-        error: String((err && err.message) || err),
-      });
-      return;
-    }
-    // The answer is NESTED rather than spread into the envelope. Spreading it looked
-    // tidier and was wrong: the reply to "self" carries the player's `id`, which
-    // overwrote the envelope's correlation `id` — so the popout could never match the
-    // response to its request and hung on every read. Caught by popout.test.mjs before
-    // it ever reached a room, and the reason the envelope's fields are now reserved.
-    popoutChannel.postMessage({ dir: "res", id: msg.id, v: POPOUT_PROTOCOL, data: payload });
-  };
-}
-
 OBR.onReady(async () => {
   setupContextMenu();
-  startPopoutHost();
   await setRelay(await OBR.player.getRole());
   // The role can change mid-session if the room owner promotes someone.
   OBR.player.onChange((player) => { setRelay(player.role); });

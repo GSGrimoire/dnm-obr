@@ -24,10 +24,10 @@
 
 import OBR from "./sdk.js";
 import {
-  ID, ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
+  ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
-  createPoolBatcher, DRIVE_THREAT_SPEND_MIN,
+  createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
 } from "./dnm.js";
 
 const MAX_LOG_ENTRIES = 40;
@@ -938,22 +938,25 @@ function partyRow(member, status) {
   return li;
 }
 
-// Deliberately the same modal id and URL shape the context menu uses in
-// background.js. Opening under a second id would let a token's sheet be open twice
-// at once, in two windows, both saving to the same token.
-const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/";
-
+// Deliberately the same route the token context menu uses in background.js, now down
+// to the same function. Opening under a second id would let a token's sheet be open
+// twice at once, in two panels, both saving to the same token.
 async function openSheetFor(itemId) {
   try {
-    await OBR.modal.open({
-      id: `${ID}/sheet-modal`,
-      url: `${SHEET_URL}?item=${encodeURIComponent(itemId)}`,
-      width: 1280,
-      height: 940,
-    });
+    await openSheetPopover(OBR, itemId, safeStorage());
   } catch (err) {
     setStatus("Could not open that sheet.");
-    console.error("[dnm] modal open failed", err);
+    console.error("[dnm] sheet open failed", err);
+  }
+}
+
+// localStorage throws outright in a frame whose cookies are blocked, rather than
+// returning null, so every read of it goes through this.
+function safeStorage() {
+  try {
+    return window.localStorage;
+  } catch (err) {
+    return null;
   }
 }
 
