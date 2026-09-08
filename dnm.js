@@ -142,8 +142,16 @@ export function dockSize(dock, viewport) {
 // Which corner of the POPOVER sits on the anchor point. This is what pins a panel to its
 // edge: a right-anchored panel held by its RIGHT corner grows leftwards under setWidth,
 // where one held by its left corner would walk off the screen.
-const H = { left: ["LEFT", 0], center: ["CENTER", 0.5], right: ["RIGHT", 1] };
-const V = { top: ["TOP", 0], center: ["CENTER", 0.5], bottom: ["BOTTOM", 1] };
+// Named DOCK_H and DOCK_V, not H and V. This block is COPIED into the creator's module
+// block, which also has the whole minified Owlbear SDK inlined above it — and that bundle
+// declares single-letter names at module top level, `V` among them. A duplicate top-level
+// const is a SyntaxError, and a SyntaxError in a module means the module never runs at
+// all. Shipped as 2.1: the sheet fell back to looking like the plain standalone creator,
+// with no header bar, no way to close the panel, and no character.
+//
+// Nothing added to this block may be named in one or two characters, ever.
+const DOCK_H = { left: ["LEFT", 0], center: ["CENTER", 0.5], right: ["RIGHT", 1] };
+const DOCK_V = { top: ["TOP", 0], center: ["CENTER", 0.5], bottom: ["BOTTOM", 1] };
 
 export function anchorParts(anchor) {
   const a = DOCK_ANCHORS.includes(anchor) ? anchor : DOCK_DEFAULT.anchor;
@@ -164,8 +172,8 @@ export function sheetPopover({ url, dock, viewport }) {
   const v = fitViewport(viewport);
   const { width, height } = dockSize(d, v);
   const { h, v: vert } = anchorParts(d.anchor);
-  const [hOrigin, hFrac] = H[h];
-  const [vOrigin, vFrac] = V[vert];
+  const [hOrigin, hFrac] = DOCK_H[h];
+  const [vOrigin, vFrac] = DOCK_V[vert];
 
   return {
     id: SHEET_POPOVER_ID,
@@ -228,7 +236,7 @@ export function writeDock(storage, dock) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.1";
+export const EXT_VERSION = "1.1B";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
