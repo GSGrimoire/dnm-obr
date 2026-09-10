@@ -70,8 +70,36 @@ const LEGACY_SIDES = {
 
 // Height defaults past any real viewport so a fresh dock fills the screen vertically,
 // which is what the right-hand dock did in 1.0. Dragging the edge brings it down.
-export const DOCK_DEFAULT = { anchor: "right", width: 560, height: 4000, zoom: 1 };
 export const DOCK_LIMITS = { width: [320, 4000], height: [220, 4000], zoom: [0.6, 1.6] };
+
+// 1.2. A SIZE PER ANCHOR, not one size shared by all nine.
+//
+// From play: a sheet along the bottom wants to be broad and short, and the same sheet at
+// a side wants to be narrow and tall. With one shared pair you re-dragged it every time
+// you moved it, which made moving it something you did not do.
+//
+// So the defaults follow the shape of the anchor rather than being one number:
+//
+//   left, right, centre     narrow and full height  — the long document, beside the map
+//   top, bottom             full width and short    — a strip under or over it
+//   the four corners        a box, neither filling
+//
+// 4000 is past any real viewport and clamps down to it, which is how "fill this axis" is
+// expressed without storing a number that goes stale when the window resizes.
+const FILL = 4000;
+export const ANCHOR_DEFAULT_SIZE = {
+  "top-left": { width: 560, height: 420 },
+  "top": { width: FILL, height: 420 },
+  "top-right": { width: 560, height: 420 },
+  "left": { width: 560, height: FILL },
+  "center": { width: 560, height: FILL },
+  "right": { width: 560, height: FILL },
+  "bottom-left": { width: 560, height: 420 },
+  "bottom": { width: FILL, height: 420 },
+  "bottom-right": { width: 560, height: 420 },
+};
+
+export const DOCK_DEFAULT = { anchor: "right", zoom: 1 };
 
 // The one invariant: some map is always reachable. The panel may fill EITHER axis but
 // never both, so a sheet can be full height beside the map (1.0's right dock) or full
@@ -99,19 +127,55 @@ const clampZoom = (n) => {
 // Anything reaching this has been through localStorage, which any page on the origin
 // can write and a user can edit by hand. Clamp on the way OUT, the same rule the
 // character code follows.
+//
+// Every anchor gets an entry, so nothing downstream has to cope with a missing one.
 export function clampDock(dock) {
   const d = dock && typeof dock === "object" ? dock : {};
-  // A 1.0 dock has `side` and no `anchor`. Only then does the legacy fill apply — a 1.1
-  // dock carrying both keys is a 1.1 dock, and its own width and height win.
+
+  // A 1.0 dock has `side` and no `anchor`. Each old side implied a size the stored object
+  // never held — a side dock was full height, the bottom dock full width — so the axis it
+  // filled is restored rather than dropped.
   const legacy = d.anchor == null && typeof d.side === "string" ? LEGACY_SIDES[d.side] : null;
   const raw = legacy ? legacy.anchor : d.anchor;
-  const fill = legacy ? legacy.fill : null;
-  return {
-    anchor: DOCK_ANCHORS.includes(raw) ? raw : DOCK_DEFAULT.anchor,
-    width: fill === "width" ? DOCK_LIMITS.width[1] : clampTo(DOCK_LIMITS.width, d.width, DOCK_DEFAULT.width),
-    height: fill === "height" ? DOCK_LIMITS.height[1] : clampTo(DOCK_LIMITS.height, d.height, DOCK_DEFAULT.height),
-    zoom: clampZoom(d.zoom),
-  };
+  const anchor = DOCK_ANCHORS.includes(raw) ? raw : DOCK_DEFAULT.anchor;
+
+  const stored = d.sizes && typeof d.sizes === "object" ? d.sizes : {};
+  // 1.1 stored ONE width and height at the top level. They belong to whichever anchor was
+  // in use, so they seed that anchor and leave the other eight at their defaults —
+  // otherwise moving the sheet after the update would throw away the size just carried
+  // across. A 1.2 dock has `sizes` and its entries win.
+  const flatW = d.width, flatH = d.height;
+  const hasFlat = flatW != null || flatH != null || legacy;
+
+  const sizes = {};
+  for (const a of DOCK_ANCHORS) {
+    const fallback = ANCHOR_DEFAULT_SIZE[a];
+    const from = stored[a] && typeof stored[a] === "object" ? stored[a]
+      : (hasFlat && a === anchor ? {
+          width: legacy && legacy.fill === "width" ? FILL : flatW,
+          height: legacy && legacy.fill === "height" ? FILL : flatH,
+        } : {});
+    sizes[a] = {
+      width: clampTo(DOCK_LIMITS.width, from.width, fallback.width),
+      height: clampTo(DOCK_LIMITS.height, from.height, fallback.height),
+    };
+  }
+
+  return { anchor, zoom: clampZoom(d.zoom), sizes };
+}
+
+// The stored size for one anchor, before the viewport has a say.
+export function dockSizeFor(dock, anchor) {
+  const d = clampDock(dock);
+  return d.sizes[DOCK_ANCHORS.includes(anchor) ? anchor : d.anchor];
+}
+
+// Returns a dock with one anchor's size replaced. The resize drag writes through this so
+// it can never touch another anchor's setup.
+export function withDockSize(dock, anchor, size) {
+  const d = clampDock(dock);
+  const a = DOCK_ANCHORS.includes(anchor) ? anchor : d.anchor;
+  return clampDock({ ...d, sizes: { ...d.sizes, [a]: { ...d.sizes[a], ...size } } });
 }
 
 function fitViewport(viewport) {
@@ -130,8 +194,9 @@ function fitViewport(viewport) {
 export function dockSize(dock, viewport) {
   const d = clampDock(dock);
   const v = fitViewport(viewport);
-  const width = Math.min(d.width, v.width);
-  const height = Math.min(d.height, v.height);
+  const own = d.sizes[d.anchor];
+  const width = Math.min(own.width, v.width);
+  const height = Math.min(own.height, v.height);
   const fillsWidth = width > Math.round(v.width * DOCK_MAX_FILL);
   return {
     width,
@@ -236,7 +301,7 @@ export function writeDock(storage, dock) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.1B";
+export const EXT_VERSION = "1.2";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;

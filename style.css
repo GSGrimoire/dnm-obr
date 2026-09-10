@@ -229,7 +229,15 @@ button:disabled { opacity: .25; cursor: not-allowed; }
   color: var(--text-dim);
 }
 .die.success { background: var(--teal-dim); border-color: var(--teal); color: var(--text-bright); }
-.die.crit { background: var(--teal); border-color: var(--text-bright); color: var(--bg); font-weight: 700; }
+/* 1.2. The same yellow the character sheet paints a critical, not teal. A crit is the
+   rarest and best thing a roll can do, and it read as just another success here while it
+   glowed on the sheet — the same die in two colours depending on where you looked. Both
+   halves already defined --warning as #ffd166; only this rule disagreed. */
+.die.crit {
+  background: var(--warning); border-color: var(--warning); color: var(--bg);
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(255,209,102,0.5);
+}
 .die.complication { background: rgba(255,107,53,.15); border-color: var(--accent); color: var(--accent); font-weight: 700; }
 
 /* v0.8.0: GM table controls. Visually separated from the roll controls above it,
