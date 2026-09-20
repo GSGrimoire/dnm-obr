@@ -18,7 +18,7 @@
 
 import OBR from "./sdk.js";
 import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
-  openSheetPopover } from "./dnm.js";
+  openSheetPopover, characterTokens, noteVanished, readRecovery, writeRecovery } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
 
@@ -181,11 +181,76 @@ async function setRelay(role) {
   }
 }
 
+// -------------------------------------------------------------
+// Character recovery watcher (1.3)
+// -------------------------------------------------------------
+// This lives here and not in roller.js for one reason: roller.js only runs while
+// the drawer is open, and a token is usually deleted with the drawer closed. This
+// page runs for the whole room session, which is the only place that sees it.
+//
+// It is GM only, matching the panel that displays the result. A player keeping a
+// buffer they cannot open would be storage spent on nothing.
+let tokenBaseline = null;
+let recoveryRoom = null;
+
+// scene.items.onChange fires on every frame of a drag, so the diff is skipped
+// unless the SET OF TOKENS CARRYING A CHARACTER has actually changed. A move
+// changes neither an id nor a code and costs one string comparison here.
+let baselineSignature = "";
+
+function watchForLostCharacters(items) {
+  const current = characterTokens(items);
+  const signature = current.map((t) => t.id + ":" + t.code.length).join("|");
+  if (signature === baselineSignature) return;
+  baselineSignature = signature;
+
+  // No baseline yet means the scene just became ready, or this is the first change
+  // after the page loaded. Seed and diff nothing: on a scene SWITCH every token
+  // disappears at once, and diffing that would file the whole party as deleted.
+  if (tokenBaseline === null) { tokenBaseline = current; return; }
+
+  const before = tokenBaseline;
+  tokenBaseline = current;
+  const stored = readRecovery(safeStorage(), recoveryRoom);
+  const next = noteVanished(stored, before, current);
+  if (next.length !== stored.length || next[0]?.code !== stored[0]?.code) {
+    writeRecovery(safeStorage(), recoveryRoom, next);
+  }
+}
+
+let unsubscribeWatcher = null;
+
+function setWatcher(role) {
+  const shouldWatch = role === "GM";
+  if (shouldWatch && !unsubscribeWatcher) {
+    tokenBaseline = null;
+    baselineSignature = "";
+    unsubscribeWatcher = OBR.scene.items.onChange(watchForLostCharacters);
+    // The subscription only fires on CHANGES, so a room entered with tokens
+    // already placed would have no baseline until the first one moved.
+    OBR.scene.items.getItems()
+      .then((items) => { if (tokenBaseline === null) watchForLostCharacters(items); })
+      .catch(() => {});
+  } else if (!shouldWatch && unsubscribeWatcher) {
+    unsubscribeWatcher();
+    unsubscribeWatcher = null;
+    tokenBaseline = null;
+    baselineSignature = "";
+  }
+}
+
 OBR.onReady(async () => {
   setupContextMenu();
-  await setRelay(await OBR.player.getRole());
+  recoveryRoom = OBR.room.id;
+  const role = await OBR.player.getRole();
+  await setRelay(role);
+  setWatcher(role);
   // The role can change mid-session if the room owner promotes someone.
-  OBR.player.onChange((player) => { setRelay(player.role); });
+  OBR.player.onChange((player) => { setRelay(player.role); setWatcher(player.role); });
   // And the set of GMs changes when anyone joins, leaves, or is promoted.
   OBR.party.onChange(() => { refreshGmConnections(); });
+  // A scene change swaps the whole item set out. Dropping the baseline rather than
+  // diffing against the old scene's tokens is what stops a scene switch reading as
+  // the entire party being deleted.
+  OBR.scene.onReadyChange(() => { tokenBaseline = null; baselineSignature = ""; });
 });

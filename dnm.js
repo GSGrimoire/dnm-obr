@@ -1350,3 +1350,150 @@ export async function openSheetPopover(obr, itemId, storage) {
   const url = `${SHEET_URL}?item=${encodeURIComponent(itemId)}`;
   await obr.popover.open(sheetPopover({ url, dock, viewport }));
 }
+
+// -------------------------------------------------------------
+// Character recovery (1.3)
+// -------------------------------------------------------------
+// Everything a character is lives in one token's metadata. Delete the token and
+// the character is gone — no undo, no copy, and nothing anywhere else. A session's
+// growth, injuries, bonds and spent Momentum go with it. Owlbear's own undo does
+// not help, because by the time anyone notices it is several actions back.
+//
+// So the GM's client keeps a local buffer. When a token that was carrying a
+// character stops carrying one — deleted, or its character detached — the code is
+// stashed in localStorage on the GM's own machine. That is not durable storage and
+// is not pretending to be: it is per browser, it does not follow the GM to another
+// computer, and clearing site data clears it. It is a safety net under one specific
+// accident, which is the accident that actually happens.
+//
+// WHY THE ROOM'S METADATA IS NOT USED: Owlbear allows 16 kB of room metadata across
+// EVERY extension in the room, and the roll log already reserves 11,000 of it. One
+// DM2 character code is around 3.8 kB. Two recovered characters would not fit, and
+// overrunning that budget breaks metadata for unrelated extensions, not just ours.
+//
+// The rule the whole design turns on: a recovered character is only ever OFFERED
+// while no token holds it. The moment a token carries that character again the
+// entry disappears from the list. There is therefore never a moment where two
+// versions of one character are both on offer, and never a click that can put a
+// stale copy over a live one. That was the explicit requirement, and it is why
+// this filters at RENDER time against the live scene rather than trying to keep
+// the stored list pruned.
+
+export const RECOVERY_PREFIX = `${ID}/recovery`;
+export const MAX_RECOVERY_ENTRIES = 25;
+export const RECOVERY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// A stored code can be a DM1 one at around 10 kB. Twenty-five of those is 250 kB,
+// which localStorage takes without complaint, but a cap means a pathological code
+// cannot quietly fill a player's browser storage either.
+export const MAX_RECOVERY_BYTES = 400000;
+
+// Keyed per room, because the same browser GMs several tables and a character
+// recovered into the wrong room is worse than one not offered at all.
+export function recoveryKeyFor(roomId) {
+  return `${RECOVERY_PREFIX}/${String(roomId || "unknown")}`;
+}
+
+// The tokens in a scene that carry a character, as {id, code}. Deliberately does
+// not parse: this runs on every scene change, including every frame of a drag.
+export function characterTokens(items) {
+  const out = [];
+  for (const item of items || []) {
+    const code = item && item.metadata && item.metadata[CHAR_KEY] && item.metadata[CHAR_KEY].code;
+    if (typeof code === "string" && code) out.push({ id: item.id, code });
+  }
+  return out;
+}
+
+// The diff. `before` and `after` are both characterTokens() results.
+//
+// Three cases have to be told apart and only one of them is a loss:
+//
+//   the token id is still there          an ordinary edit — every save rewrites
+//                                        the code, so comparing codes would
+//                                        report a loss on every keystroke
+//   the id is gone, the code is elsewhere a character moved to another token
+//   the id is gone and so is the code     the loss this exists for
+//
+// A scene SWITCH empties the item list too, which would read as the whole party
+// being deleted at once. That is not handled here — the caller re-seeds its
+// baseline on scene ready without diffing, because only the caller knows why the
+// list emptied. Keeping that decision out of this function is what lets it be
+// tested without a room.
+export function noteVanished(list, before, after, now) {
+  const stamp = typeof now === "number" ? now : Date.now();
+  const liveIds = new Set((after || []).map((t) => t.id));
+  const liveCodes = new Set((after || []).map((t) => t.code));
+  let next = Array.isArray(list) ? list.slice() : [];
+  for (const was of before || []) {
+    if (!was || typeof was.code !== "string" || !was.code) continue;
+    if (liveIds.has(was.id)) continue;
+    if (liveCodes.has(was.code)) continue;
+    next = next.filter((entry) => entry.code !== was.code);
+    next.unshift({ code: was.code, tokenId: was.id, at: stamp });
+  }
+  return trimRecovery(next, stamp);
+}
+
+export function trimRecovery(list, now) {
+  const stamp = typeof now === "number" ? now : Date.now();
+  let next = (Array.isArray(list) ? list : [])
+    .filter((entry) => entry && typeof entry.code === "string" && entry.code)
+    .filter((entry) => {
+      const at = Number(entry.at);
+      return Number.isFinite(at) && stamp - at < RECOVERY_TTL_MS;
+    })
+    .map((entry) => ({ code: entry.code, tokenId: String(entry.tokenId || ""), at: Number(entry.at) }))
+    .slice(0, MAX_RECOVERY_ENTRIES);
+  while (next.length > 1 && JSON.stringify(next).length > MAX_RECOVERY_BYTES) next.pop();
+  return next;
+}
+
+// Storage is untrusted on the way OUT, the same rule the dock preference follows:
+// it is same-origin, but a browser extension, another tab or a previous version of
+// this file could have left anything there, and it is read straight into a render.
+export function readRecovery(storage, roomId, now) {
+  if (!storage) return [];
+  try {
+    return trimRecovery(JSON.parse(storage.getItem(recoveryKeyFor(roomId)) || "[]"), now);
+  } catch (err) {
+    return [];
+  }
+}
+
+export function writeRecovery(storage, roomId, list, now) {
+  const trimmed = trimRecovery(list, now);
+  if (!storage) return trimmed;
+  try {
+    storage.setItem(recoveryKeyFor(roomId), JSON.stringify(trimmed));
+  } catch (err) {
+    // Quota, or a frame whose cookies are blocked. Losing the buffer is not worth
+    // taking down the scene-change handler it is called from.
+    console.warn("[dnm] could not save the recovery buffer", err);
+  }
+  return trimmed;
+}
+
+// What the list should SHOW, given what is live right now. An entry is hidden when
+// a token in the scene already holds that character — matched on the name, through
+// the same bondNameKey() the roll merge uses, because a restored character will
+// have a different token id and a different code from the one that was lost.
+//
+// A character with no name cannot be matched that way, so it is matched on its
+// token id instead. That only hides it if the very token that vanished comes back,
+// which is nearly never — an unnamed character therefore lingers in the list. That
+// is the safe direction: the cost is a stale row the GM dismisses, and the cost of
+// guessing the other way is a character silently not offered.
+export function visibleRecovery(list, items, resolveName) {
+  const liveNames = new Set();
+  const liveIds = new Set();
+  for (const token of characterTokens(items)) {
+    liveIds.add(token.id);
+    const name = bondNameKey(resolveName ? resolveName(token.code) : "");
+    if (name) liveNames.add(name);
+  }
+  return (list || []).filter((entry) => {
+    const name = bondNameKey(resolveName ? resolveName(entry.code) : "");
+    if (name) return !liveNames.has(name);
+    return !liveIds.has(entry.tokenId);
+  });
+}

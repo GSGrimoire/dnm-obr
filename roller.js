@@ -26,6 +26,7 @@ import OBR from "./sdk.js";
 import {
   ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
+  readRecovery, writeRecovery, visibleRecovery, characterTokens,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
 } from "./dnm.js";
@@ -73,6 +74,12 @@ const clearBtn = el("clear-log");
 const gmPanel = el("gm-panel");
 const partyPanel = el("party-panel");
 const partyListEl = el("party-list");
+const recoveryEl = el("recovery");
+const recoveryListEl = el("recovery-list");
+const recoveryCountEl = el("recovery-count");
+const backupEl = el("backup");
+const backupTextEl = el("backup-text");
+const backupSummaryEl = el("backup-summary");
 const noGmEl = el("no-gm");
 
 // 0.9.10. Reported from play: in a room with no GM, a player presses + on Momentum,
@@ -865,10 +872,26 @@ function readPartyMember(code) {
   if (hit) return hit;
   const r = parseCode(code);
   if (r.error) return null;
+  // 1.3. Exhaustion and injuries join Spirit on the row. Both are read the same way
+  // the rest of this panel reads a character: the live values from CP, the names for
+  // them from SN. Neither needs a creator change.
+  //
+  // A character from before exhaustionTypes rode in the snapshot has no names to look
+  // up, so an unknown key falls back to its own first letter rather than being
+  // dropped — a mark with a weak tooltip is still the warning the GM needs.
+  const types = Array.isArray(r.snap?.exhaustionTypes) ? r.snap.exhaustionTypes : [];
+  const active = Array.isArray(r.char?.activeExhaustion) ? r.char.activeExhaustion : [];
+  const exhaustion = active.map((key) => {
+    const found = types.find((t) => t.key === key);
+    const name = (found?.name || String(key || "")).trim() || "Exhausted";
+    return { initial: name.slice(0, 1).toUpperCase(), name, attrName: found?.attrName || null };
+  });
   const member = {
     name: r.snap?.name || "Unnamed",
     spirit: typeof r.char?.currentSpirit === "number" ? r.char.currentSpirit : null,
     spiritMax: r.snap?.spiritMax ?? null,
+    exhaustion,
+    injuries: Array.isArray(r.char?.injuries) ? r.char.injuries.length : 0,
     char: r.char,
   };
   // Bounded so a long session of edits cannot grow this without limit. Every edit
@@ -896,6 +919,38 @@ function partyRow(member, status) {
     ? "Spirit ?"
     : `Spirit ${member.spirit}/${member.spiritMax ?? "?"}`;
   head.append(spirit);
+
+  // 1.3. Exhaustion as initials, injuries as a count. Deliberately not more than
+  // that: the GM asked for something scannable across six rows, and the party panel
+  // is a glance, not a sheet. The initials carry the full name in a tooltip.
+  //
+  // The injury COUNT is shown and the injuries themselves never are. What someone is
+  // carrying is theirs to tell the table; that it is four of them is what the GM has
+  // to know to pitch the next scene.
+  if (member.exhaustion?.length) {
+    const marks = document.createElement("span");
+    marks.className = "party-exhaustion";
+    marks.title = member.exhaustion
+      .map((e) => (e.attrName ? `${e.name} (${e.attrName})` : e.name))
+      .join(", ");
+    for (const e of member.exhaustion) {
+      const mark = document.createElement("span");
+      mark.className = "party-mark";
+      mark.textContent = e.initial;
+      // Per-mark too, so hovering one of four marks says which one it is.
+      mark.title = e.attrName ? `${e.name} (${e.attrName})` : e.name;
+      marks.append(mark);
+    }
+    head.append(marks);
+  }
+
+  if (member.injuries > 0) {
+    const hurt = document.createElement("span");
+    hurt.className = "party-injuries";
+    hurt.textContent = member.injuries === 1 ? "1 Injury" : `${member.injuries} Injuries`;
+    hurt.title = "Open the sheet to see what they are.";
+    head.append(hurt);
+  }
 
   // Three states, not two. "Not synced" is a character that has never met this room
   // — newly built, or attached to a token for the first time. It is not behind and
@@ -995,6 +1050,9 @@ async function refreshParty(items) {
     return;
   }
 
+  // entries carries each token's whole code string, and every edit to a character
+  // rewrites that code — so exhaustion and injuries moving IS a signature change
+  // already. Nothing extra is needed here, and adding it would only cost a parse.
   const roomEpochs = readEpochs(state);
   const signature = JSON.stringify([entries, roomEpochs]);
   if (signature === partySignature) return;
@@ -1013,9 +1071,245 @@ async function refreshParty(items) {
   renderParty(members);
 }
 
+// -------------------------------------------------------------
+// Lost characters, and backups (1.3)
+// -------------------------------------------------------------
+// The buffer itself is filled by background.js, which runs for the whole room
+// session — a token is usually deleted with this drawer shut. This half only
+// reads it, filters it against what is live, and offers two ways back.
+//
+// The filter is the important part and it runs HERE rather than when the buffer
+// is written: an entry is shown only while no token in the scene holds that
+// character. Restore one and it leaves the list on the next scene change, so the
+// GM is never looking at a stale copy of a character that is already in play, and
+// there is no button anywhere that can put an old version over a current one.
+let lastRecoveryItems = [];
+
+function recoveryRoomId() {
+  try { return OBR.room.id; } catch (err) { return "unknown"; }
+}
+
+// readPartyMember() is the party panel's cache, so a character already on screen
+// costs nothing here. A recovered one is parsed once and cached with the rest.
+function nameForCode(code) {
+  const member = readPartyMember(code);
+  return member ? member.name : "";
+}
+
+function renderRecovery(items) {
+  if (!recoveryEl) return;
+  if (role !== "GM" || standalone) { recoveryEl.hidden = true; return; }
+  if (items) lastRecoveryItems = items;
+
+  const stored = readRecovery(safeStorage(), recoveryRoomId());
+  const shown = visibleRecovery(stored, lastRecoveryItems, nameForCode);
+
+  recoveryEl.hidden = shown.length === 0;
+  recoveryCountEl.textContent = shown.length ? String(shown.length) : "";
+  recoveryListEl.innerHTML = "";
+
+  for (const entry of shown) {
+    const li = document.createElement("li");
+    li.className = "recovery-row";
+
+    const head = document.createElement("div");
+    head.className = "recovery-head-row";
+
+    const name = document.createElement("span");
+    name.className = "recovery-name";
+    // A code that will not parse still gets a row. It is still a character someone
+    // lost, and "Copy code" works on it whether or not this build can read it —
+    // which matters most for a code from a NEWER creator than this extension.
+    name.textContent = nameForCode(entry.code) || "Unreadable character";
+    head.append(name);
+
+    const when = document.createElement("span");
+    when.className = "recovery-when";
+    when.textContent = describeAge(Date.now() - entry.at);
+    when.title = new Date(entry.at).toLocaleString();
+    head.append(when);
+
+    li.append(head);
+
+    const actions = document.createElement("div");
+    actions.className = "recovery-actions";
+
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "ghost";
+    copy.textContent = "Copy code";
+    copy.addEventListener("click", () => copyText(entry.code, "Character code copied."));
+    actions.append(copy);
+
+    const attach = document.createElement("button");
+    attach.type = "button";
+    attach.className = "ghost";
+    attach.textContent = "Attach to selected";
+    attach.title = "Select one token with no character on it first";
+    attach.addEventListener("click", () => attachToSelected(entry.code));
+    actions.append(attach);
+
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "ghost recovery-forget";
+    forget.textContent = "Dismiss";
+    forget.addEventListener("click", () => forgetRecovery(entry.code));
+    actions.append(forget);
+
+    li.append(actions);
+    recoveryListEl.append(li);
+  }
+}
+
+function describeAge(ms) {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return minutes + "m ago";
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + "h ago";
+  return Math.floor(hours / 24) + "d ago";
+}
+
+function forgetRecovery(code) {
+  const storage = safeStorage();
+  const next = readRecovery(storage, recoveryRoomId()).filter((e) => e.code !== code);
+  writeRecovery(storage, recoveryRoomId(), next);
+  renderRecovery();
+}
+
+// Writes the character onto a token the GM has selected. Guarded twice, because
+// this is the only place in the extension that can put a character onto a token
+// and the thing it must never do is land on one that already has a character.
+//
+// The second guard is not redundant with the first: getSelection() returns ids,
+// and the item behind an id can have gained a character between the read and the
+// write. The check therefore happens INSIDE the mutator, where it sees the item
+// Owlbear is about to hand back.
+async function attachToSelected(code) {
+  try {
+    const selection = (await OBR.player.getSelection()) || [];
+    if (selection.length !== 1) {
+      setStatus("Select exactly one token first.");
+      return;
+    }
+    const [item] = await OBR.scene.items.getItems(selection);
+    if (!item) { setStatus("That token is no longer in the scene."); return; }
+    if (item.metadata?.[CHAR_KEY]?.code) {
+      setStatus("That token already has a character. Pick an empty one.");
+      return;
+    }
+    let refused = false;
+    await OBR.scene.items.updateItems(selection, (items) => {
+      for (const target of items) {
+        if (target.metadata?.[CHAR_KEY]?.code) { refused = true; continue; }
+        target.metadata[CHAR_KEY] = { v: 1, code };
+      }
+    });
+    if (refused) { setStatus("That token already has a character. Pick an empty one."); return; }
+    setStatus("Character attached. Open its sheet to check it over.");
+    // The entry disappears on its own once the scene change comes back through
+    // visibleRecovery(), so nothing is deleted here.
+  } catch (err) {
+    console.error("[dnm] attach failed", err);
+    setStatus("Could not attach that character.");
+  }
+}
+
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus(done);
+  } catch (err) {
+    // Clipboard permission is not guaranteed inside someone else's iframe, so
+    // there is always a selectable fallback rather than a dead button.
+    showBackup(text, "Copy failed — select the text and copy it by hand.");
+  }
+}
+
+// -------------------------------------------------------------
+// Backups
+// -------------------------------------------------------------
+// Everything in the scene, as codes, in a format that is still readable if both
+// halves of this toolchain disappear: the codes are plain text on their own lines
+// under a header, and each one pastes back through Attach D&M character.
+//
+// It deliberately does NOT offer a one-click restore of the whole file. Reading a
+// backup back in would mean deciding which token each character belongs on, and
+// the only safe answer to that is the GM deciding one at a time.
+function buildBackup(items) {
+  const rows = characterTokens(items).map(({ code }) => ({ name: nameForCode(code) || "Unnamed", code }));
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  const stamp = new Date().toISOString();
+  const lines = [
+    "Dreams & Machines — character backup",
+    stamp,
+    rows.length === 1 ? "1 character" : rows.length + " characters",
+    "",
+    "Paste any one of these into a token with Attach D&M character.",
+    "",
+  ];
+  for (const row of rows) lines.push(row.name, row.code, "");
+  return { text: lines.join("\n"), count: rows.length, stamp };
+}
+
+function showBackup(text, summary) {
+  if (!backupEl) return;
+  backupEl.hidden = false;
+  backupTextEl.value = text;
+  backupSummaryEl.textContent = summary;
+  backupTextEl.focus();
+  backupTextEl.select();
+}
+
+async function openBackup() {
+  try {
+    const items = await OBR.scene.items.getItems();
+    const backup = buildBackup(items);
+    if (!backup.count) { setStatus("No characters in this scene to back up."); return; }
+    showBackup(backup.text, backup.count === 1 ? "1 character" : backup.count + " characters");
+  } catch (err) {
+    console.error("[dnm] backup failed", err);
+    setStatus("Could not read the scene.");
+  }
+}
+
+function downloadBackup() {
+  const text = backupTextEl.value;
+  if (!text) return;
+  try {
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "dnm-characters-" + new Date().toISOString().slice(0, 10) + ".txt";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Revoked on a timer rather than immediately: revoking in the same tick can
+    // cancel the download in some browsers before it has read the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    setStatus("Saved. If nothing downloaded, copy the text instead.");
+  } catch (err) {
+    setStatus("Download blocked here — copy the text instead.");
+  }
+}
+
+function wireBackup() {
+  const open = el("party-backup");
+  if (open) open.addEventListener("click", openBackup);
+  const copy = el("backup-copy");
+  if (copy) copy.addEventListener("click", () => copyText(backupTextEl.value, "Backup copied."));
+  const download = el("backup-download");
+  if (download) download.addEventListener("click", downloadBackup);
+  const close = el("backup-close");
+  if (close) close.addEventListener("click", () => { backupEl.hidden = true; });
+}
+
 function applyPartyVisibility() {
   if (!partyPanel) return;
   partyPanel.hidden = role !== "GM" || standalone;
+  if (partyPanel.hidden && backupEl) backupEl.hidden = true;
+  renderRecovery();
 }
 
 // -------------------------------------------------------------
@@ -1032,6 +1326,7 @@ async function startInOwlbear() {
   if (!charEl.value) charEl.value = playerName;
   applyRole();
   wireGmPanel();
+  wireBackup();
   await refreshHasGM();
 
   await load();
@@ -1044,6 +1339,10 @@ async function startInOwlbear() {
 
   applyPartyVisibility();
   refreshParty();
+  // Seeded from a real read rather than waiting for a change: the drawer is
+  // usually opened BECAUSE a token has just gone, and the change that lost it
+  // happened while this page was not running.
+  OBR.scene.items.getItems().then((items) => renderRecovery(items)).catch(() => renderRecovery([]));
 
   // onChange fires when the selection changes, which is how the popover
   // learns which character you are pointing at.
@@ -1069,13 +1368,22 @@ async function startInOwlbear() {
   // Fires on every item change including drags. refreshParty() is signature-guarded
   // precisely because of this: a move changes no code and no epoch, so it costs a
   // string comparison and returns.
-  OBR.scene.items.onChange((items) => refreshParty(items));
+  OBR.scene.items.onChange((items) => {
+    refreshParty(items);
+    // Not signature-guarded the way refreshParty() is: the recovery list changes
+    // when a token appears as well as when one goes, and an appearing token is
+    // exactly the case that must remove a row.
+    renderRecovery(items);
+  });
 
   // A scene change swaps the whole item set out. The cache is keyed on code strings
   // rather than scene, so it stays valid, but the signature must not survive.
   OBR.scene.onReadyChange((sceneReady) => {
     partySignature = null;
-    if (sceneReady) refreshParty();
+    if (sceneReady) {
+      refreshParty();
+      OBR.scene.items.getItems().then((items) => renderRecovery(items)).catch(() => {});
+    }
   });
 
   // Optimistic local view. Roll entries carry an id and applyEvent
