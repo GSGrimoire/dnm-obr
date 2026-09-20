@@ -896,21 +896,333 @@ export function b64encode(str) {
   return btoa(encodeURIComponent(str)).replace(/=/g, "");
 }
 
+// ==== BEGIN SHARED CODEC — verbatim twin in dnm-cc/index.html ====
+// codec.test.mjs compares the two character for character. Regenerate the
+// other copy rather than editing it; only the `export ` keywords differ.
+
+// -------------------------------------------------------------
+// The payload codec (DM2)
+// -------------------------------------------------------------
+// v1.3. A DM1 code encoded every payload as btoa(encodeURIComponent(json)),
+// which costs about 2.07x the JSON: the URI step turns each non-ASCII byte into
+// three ASCII characters and base64 then inflates that again. Measured on a real
+// played character the whole code came to 9,761 characters, of which 6,405 was
+// the SN snapshot and 3,135 the CP payload — for 1,513 characters of actual
+// character. DM2 deflates each payload before base64 and the same code is 3,038.
+//
+// WHY THIS IS WRITTEN OUT BY HAND rather than using CompressionStream:
+// buildCharacterCode() is synchronous and is called from about forty mutation
+// sites through saveCharacterLocal(), and again from queueSave() on every render.
+// CompressionStream is promise-based, so adopting it would put an await in the
+// middle of the token write and turn every one of those call sites into a race.
+// This codec is synchronous and costs about 0.4ms for a whole character code.
+//
+// WHY IT EMITS REAL DEFLATE (RFC 1951) rather than something bespoke: a payload
+// that any zlib, any DecompressionStream and any Python install can read is a
+// durability property in itself. If both halves of this toolchain disappear, a
+// backup file is still a base64 deflate stream and the characters come back.
+//
+// The encoder emits fixed-Huffman blocks only (BTYPE=01), which needs no tree
+// construction and costs roughly 15% against zlib's dynamic trees — 3,802 rather
+// than 3,038 on that same character. The decoder reads all three block types, so
+// it can read anything a standards-compliant encoder produces, including our own
+// output if the encoder is ever upgraded to dynamic trees.
+//
+// codec.test.mjs fuzzes this against zlib in BOTH directions over 400 generated
+// inputs plus real payloads: our encoder into zlib's decoder, zlib's encoder at
+// four levels into our decoder, and our own round trip.
+
+const LEN_BASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+const LEN_EXTRA = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+const DIST_BASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+const DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+const CODE_LEN_ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+
+const MAX_MATCH = 258;
+const MIN_MATCH = 3;
+const WINDOW = 32768;
+// How far back along one hash chain to look. Deflate's own "good enough" cut-off.
+// Unbounded, a payload of one repeated character walks the whole chain per byte.
+const CHAIN_LIMIT = 128;
+
+// Huffman codes are written most significant bit first; everything else in the
+// format is least significant bit first. Getting these two the same way round is
+// the classic way to produce a stream that only your own decoder can read.
+function bitWriter() {
+  const bytes = [];
+  let cur = 0, used = 0;
+  const put = (bit) => {
+    cur |= bit << used;
+    if (++used === 8) { bytes.push(cur); cur = 0; used = 0; }
+  };
+  return {
+    bits(value, count) { for (let i = 0; i < count; i++) put((value >> i) & 1); },
+    huff(code, count) { for (let i = count - 1; i >= 0; i--) put((code >> i) & 1); },
+    finish() { if (used) bytes.push(cur); return Uint8Array.from(bytes); },
+  };
+}
+
+// RFC 1951 3.2.6. The fixed literal/length alphabet is four ranges with three
+// different code lengths, which is why this cannot be a single table lookup.
+function writeFixedSymbol(writer, symbol) {
+  if (symbol <= 143) writer.huff(0x30 + symbol, 8);
+  else if (symbol <= 255) writer.huff(0x190 + symbol - 144, 9);
+  else if (symbol <= 279) writer.huff(symbol - 256, 7);
+  else writer.huff(0xC0 + symbol - 280, 8);
+}
+
+export function deflateRaw(bytes) {
+  const writer = bitWriter();
+  writer.bits(1, 1);   // BFINAL — one block, always
+  writer.bits(1, 2);   // BTYPE 01 — fixed Huffman
+  const chains = new Map();
+  const remember = (at) => {
+    if (at + MIN_MATCH > bytes.length) return;
+    const key = bytes[at] * 65536 + bytes[at + 1] * 256 + bytes[at + 2];
+    let chain = chains.get(key);
+    if (!chain) chains.set(key, chain = []);
+    chain.push(at);
+  };
+  let i = 0;
+  while (i < bytes.length) {
+    let matchLen = 0, matchDist = 0;
+    if (i + MIN_MATCH <= bytes.length) {
+      const chain = chains.get(bytes[i] * 65536 + bytes[i + 1] * 256 + bytes[i + 2]);
+      if (chain) {
+        const ceiling = Math.min(MAX_MATCH, bytes.length - i);
+        for (let k = chain.length - 1; k >= 0 && chain.length - k <= CHAIN_LIMIT; k--) {
+          const at = chain[k];
+          const dist = i - at;
+          if (dist > WINDOW) break;   // the chain is in order, so everything older is too far
+          let len = 0;
+          while (len < ceiling && bytes[at + len] === bytes[i + len]) len++;
+          if (len > matchLen) { matchLen = len; matchDist = dist; if (len === ceiling) break; }
+        }
+      }
+    }
+    if (matchLen >= MIN_MATCH) {
+      let li = 0;
+      while (li < LEN_BASE.length - 1 && LEN_BASE[li + 1] <= matchLen) li++;
+      writeFixedSymbol(writer, 257 + li);
+      writer.bits(matchLen - LEN_BASE[li], LEN_EXTRA[li]);
+      let di = 0;
+      while (di < DIST_BASE.length - 1 && DIST_BASE[di + 1] <= matchDist) di++;
+      writer.huff(di, 5);   // fixed distance codes are five straight bits
+      writer.bits(matchDist - DIST_BASE[di], DIST_EXTRA[di]);
+      for (let n = 0; n < matchLen; n++) remember(i + n);
+      i += matchLen;
+    } else {
+      writeFixedSymbol(writer, bytes[i]);
+      remember(i);
+      i++;
+    }
+  }
+  writeFixedSymbol(writer, 256);   // end of block
+  return writer.finish();
+}
+
+// Canonical Huffman, RFC 1951 3.2.2: sort by code length, then by symbol, and
+// the codes fall out. Keyed on length and code together because the same numeric
+// code means different symbols at different lengths.
+function huffmanTable(lengths) {
+  let maxLen = 0;
+  for (const len of lengths) if (len > maxLen) maxLen = len;
+  const countByLen = new Array(maxLen + 1).fill(0);
+  for (const len of lengths) if (len) countByLen[len]++;
+  const nextCode = new Array(maxLen + 1).fill(0);
+  let code = 0;
+  for (let len = 1; len <= maxLen; len++) {
+    code = (code + countByLen[len - 1]) << 1;
+    nextCode[len] = code;
+  }
+  const table = new Map();
+  for (let symbol = 0; symbol < lengths.length; symbol++) {
+    const len = lengths[symbol];
+    if (len) table.set(len * 65536 + nextCode[len]++, symbol);
+  }
+  return { table, maxLen };
+}
+
+function bitReader(bytes) {
+  let pos = 0, bit = 0;
+  const self = {
+    bits(count) {
+      let value = 0;
+      for (let i = 0; i < count; i++) {
+        if (pos >= bytes.length) throw new Error("deflate: input ended mid-symbol");
+        value |= ((bytes[pos] >> bit) & 1) << i;
+        if (++bit === 8) { bit = 0; pos++; }
+      }
+      return value;
+    },
+    align() { if (bit) { bit = 0; pos++; } },
+    byte() {
+      if (pos >= bytes.length) throw new Error("deflate: input ended mid-symbol");
+      return bytes[pos++];
+    },
+    symbol(tree) {
+      let code = 0;
+      for (let len = 1; len <= tree.maxLen; len++) {
+        code = (code << 1) | self.bits(1);
+        const found = tree.table.get(len * 65536 + code);
+        if (found !== undefined) return found;
+      }
+      throw new Error("deflate: no symbol for that code");
+    },
+  };
+  return self;
+}
+
+let fixedLiteralTree = null, fixedDistanceTree = null;
+
+export function inflateRaw(bytes) {
+  const reader = bitReader(bytes);
+  const out = [];
+  let final = 0;
+  do {
+    final = reader.bits(1);
+    const type = reader.bits(2);
+    if (type === 0) {
+      // Stored. LEN then its one's complement, which we skip rather than verify:
+      // a corrupt payload fails at JSON.parse either way, with a better message.
+      reader.align();
+      const len = reader.byte() | (reader.byte() << 8);
+      reader.byte(); reader.byte();
+      for (let i = 0; i < len; i++) out.push(reader.byte());
+      continue;
+    }
+    let literals, distances;
+    if (type === 1) {
+      if (!fixedLiteralTree) {
+        const lengths = new Array(288);
+        for (let i = 0; i < 144; i++) lengths[i] = 8;
+        for (let i = 144; i < 256; i++) lengths[i] = 9;
+        for (let i = 256; i < 280; i++) lengths[i] = 7;
+        for (let i = 280; i < 288; i++) lengths[i] = 8;
+        fixedLiteralTree = huffmanTable(lengths);
+        fixedDistanceTree = huffmanTable(new Array(30).fill(5));
+      }
+      literals = fixedLiteralTree;
+      distances = fixedDistanceTree;
+    } else if (type === 2) {
+      const litCount = reader.bits(5) + 257;
+      const distCount = reader.bits(5) + 1;
+      const clCount = reader.bits(4) + 4;
+      const clLengths = new Array(19).fill(0);
+      for (let i = 0; i < clCount; i++) clLengths[CODE_LEN_ORDER[i]] = reader.bits(3);
+      const clTree = huffmanTable(clLengths);
+      const lengths = [];
+      while (lengths.length < litCount + distCount) {
+        const symbol = reader.symbol(clTree);
+        if (symbol < 16) lengths.push(symbol);
+        else if (symbol === 16) {
+          if (!lengths.length) throw new Error("deflate: repeat with nothing to repeat");
+          const prev = lengths[lengths.length - 1];
+          for (let n = 3 + reader.bits(2); n > 0; n--) lengths.push(prev);
+        } else if (symbol === 17) {
+          for (let n = 3 + reader.bits(3); n > 0; n--) lengths.push(0);
+        } else {
+          for (let n = 11 + reader.bits(7); n > 0; n--) lengths.push(0);
+        }
+      }
+      literals = huffmanTable(lengths.slice(0, litCount));
+      distances = huffmanTable(lengths.slice(litCount));
+    } else {
+      throw new Error("deflate: reserved block type");
+    }
+    for (;;) {
+      const symbol = reader.symbol(literals);
+      if (symbol === 256) break;
+      if (symbol < 256) { out.push(symbol); continue; }
+      const li = symbol - 257;
+      if (li >= LEN_BASE.length) throw new Error("deflate: length code out of range");
+      const len = LEN_BASE[li] + reader.bits(LEN_EXTRA[li]);
+      const di = reader.symbol(distances);
+      if (di >= DIST_BASE.length) throw new Error("deflate: distance code out of range");
+      const dist = DIST_BASE[di] + reader.bits(DIST_EXTRA[di]);
+      if (dist > out.length) throw new Error("deflate: distance reaches before the start");
+      const from = out.length - dist;
+      // Deliberately one byte at a time: a match may overlap its own output,
+      // which is how deflate encodes a run, so this cannot be a slice-and-append.
+      for (let i = 0; i < len; i++) out.push(out[from + i]);
+    }
+  } while (!final);
+  return Uint8Array.from(out);
+}
+
+// btoa takes a string of code points 0-255, so the bytes go through
+// String.fromCharCode — in CHUNKS, because spreading a whole payload into an
+// argument list overflows the stack somewhere around a hundred thousand bytes.
+function bytesToB64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return btoa(binary).replace(/=/g, "");
+}
+
+function b64ToBytes(text) {
+  let padded = text;
+  const pad = padded.length % 4;
+  if (pad === 2) padded += "==";
+  else if (pad === 3) padded += "=";
+  else if (pad === 1) throw new Error("deflate: truncated base64");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// The two functions the code format actually calls. The alphabet is standard
+// base64 — A-Za-z0-9+/ — which deliberately contains no '-', so a packed payload
+// can never be mistaken for a segment boundary in a '-' joined code.
+export function packPayload(text) {
+  return bytesToB64(deflateRaw(new TextEncoder().encode(text)));
+}
+
+export function unpackPayload(text) {
+  return new TextDecoder().decode(inflateRaw(b64ToBytes(text)));
+}
+// ==== END SHARED CODEC ====
+
 // -------------------------------------------------------------
 // Character codes
 // -------------------------------------------------------------
-// A DM1 code is a '-' joined list of segments. We only care about two:
+// A character code is a '-' joined list of segments. We only care about two:
 //
 //   CP  the full character object, which holds everything mutable
 //   SN  the computed snapshot the creator adds from v1.11 onward
 //
 // Every other segment is left untouched. That is what makes the round trip
 // lossless: we never need to understand a segment in order to preserve it.
+//
+// 1.3. Two formats exist and both are read, forever. DM1 encodes each payload as
+// btoa(encodeURIComponent(json)); DM2 deflates it first. The frame is the same in
+// both, so the version byte decides only which unpacker runs — everything below
+// this line, including the search-from-the-end rule, is format independent.
+//
+// DM1 is never written again and never removed: codes sit in chat logs and on
+// tokens in rooms nobody has opened for months.
+export function unpackerFor(version) {
+  if (version === "DM2") return unpackPayload;
+  if (version === "DM1") return b64decode;
+  return null;
+}
+
 export function parseCode(code) {
   const trimmed = (code || "").trim();
   if (!trimmed) return { error: "Paste a character code first." };
   const parts = trimmed.split("-");
-  if (parts[0] !== "DM1") return { error: "That does not look like a Dreams & Machines code." };
+  const unpack = unpackerFor(parts[0]);
+  if (!unpack) {
+    // A code whose version byte we do not know is far more likely to be from a
+    // NEWER creator than to be junk, because Owlbear caches this background page
+    // for the whole room session — so the half-hour after a release is exactly
+    // when a current creator meets a stale extension. Say the thing that fixes it.
+    return /^DM\d/.test(parts[0])
+      ? { error: "That code is from a newer character creator than this extension can read. Reload the room." }
+      : { error: "That does not look like a Dreams & Machines code." };
+  }
 
   // Searched from the END, and that is not a style preference (0.9.2).
   //
@@ -943,8 +1255,8 @@ export function parseCode(code) {
 
   let char, snap;
   try {
-    char = JSON.parse(b64decode(parts[cpIndex].slice(2)));
-    snap = JSON.parse(b64decode(parts[snIndex].slice(2)));
+    char = JSON.parse(unpack(parts[cpIndex].slice(2)));
+    snap = JSON.parse(unpack(parts[snIndex].slice(2)));
   } catch (err) {
     return { error: "That code is damaged and could not be read." };
   }
@@ -953,9 +1265,15 @@ export function parseCode(code) {
 
 // Rebuild a code with an edited character object, leaving all other segments
 // byte for byte identical to how the creator wrote them.
+//
+// The replacement CP is packed in the format the code ARRIVED in, read off its own
+// version byte. Writing a DM2 payload into a DM1 code would produce something that
+// parses without error and comes back as mojibake, which is the worst of the three
+// possible outcomes: no throw, no clue, and a character quietly replaced by noise.
 export function rebuildCode(parts, cpIndex, char) {
+  const pack = parts[0] === "DM2" ? packPayload : b64encode;
   const next = parts.slice();
-  next[cpIndex] = "CP" + b64encode(JSON.stringify(char));
+  next[cpIndex] = "CP" + pack(JSON.stringify(char));
   return next.join("-");
 }
 
