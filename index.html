@@ -90,41 +90,29 @@
       catches up the next time it is opened.</p>
   </section>
 
-  <!-- 1.4. Deliberately NOT inside #gm-panel: players see this one. The GM gets the
-       controls, everyone gets the list, and a row the GM has hidden is not in the
-       room's metadata at all rather than merely undrawn — see readInitiative(). -->
-  <section id="initiative" class="initiative" hidden>
-    <div class="gm-panel-head">
-      <h2>Initiative</h2>
-      <span id="init-round" class="init-round"></span>
-      <div id="init-gm-controls" class="init-controls" hidden>
-        <button type="button" id="init-next" class="gm-btn">Next Round</button>
-        <button type="button" id="init-end" class="ghost">End</button>
-      </div>
-    </div>
-    <ol id="init-list" class="init-list"></ol>
-    <!-- GM only. Auto-grows the way the sheet's Injuries and Truths do: type a name,
-         press enter, and a fresh blank row appears under it. -->
-    <div id="init-add-row" class="init-add" hidden>
-      <input type="text" id="init-add" class="init-add-input" placeholder="Add an adversary…"
-        maxlength="32" spellcheck="false" autocomplete="off">
-    </div>
-    <p class="gm-note" id="init-note"></p>
-  </section>
-
-  <!-- 0.9.0, shared with the table from 1.4. Answers the question the buttons above leave open: you pressed
-       Bed, but who actually got it? Reads every token in the scene carrying a
-       character and reports where each one stands. -->
+  <!-- 0.9.0, shared with the table from 1.4, and the initiative tracker folded into
+       it in 1.4B. It was a separate panel for one release and printed the same four
+       names the party list was already printing, with a different set of buttons
+       beside them. One list, one row per combatant. -->
   <section id="party-panel" class="party-panel" hidden>
     <div class="gm-panel-head">
       <h2>Party</h2>
       <span class="gm-badge">GM</span>
+      <span id="init-round" class="init-round" hidden></span>
+      <button type="button" id="init-next" class="gm-btn init-next" hidden>Next Round</button>
+      <button type="button" id="init-end" class="ghost" hidden>End</button>
       <button type="button" id="party-share" class="ghost party-share"
         title="Whether the players can see this panel">Shared</button>
       <button type="button" id="party-backup" class="ghost party-backup"
         title="Every character in this scene, as codes you can keep">Back up</button>
     </div>
     <ol id="party-list" class="party-list"></ol>
+    <!-- GM only, and only while a round is running. Auto-grows the way the sheet's
+         Injuries and Truths do: type a name, press enter, a fresh blank appears. -->
+    <div id="init-add-row" class="init-add" hidden>
+      <input type="text" id="init-add" class="init-add-input" placeholder="Add an adversary…"
+        maxlength="32" spellcheck="false" autocomplete="off">
+    </div>
     <p class="gm-note" id="party-note">A character catches up when its sheet is next
       opened. Not synced means the character has never met this room and has nothing
       to catch up on.</p>

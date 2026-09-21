@@ -82,10 +82,7 @@ const recoveryCountEl = el("recovery-count");
 const backupEl = el("backup");
 const backupTextEl = el("backup-text");
 const backupSummaryEl = el("backup-summary");
-const initEl = el("initiative");
-const initListEl = el("init-list");
 const initRoundEl = el("init-round");
-const initNoteEl = el("init-note");
 const noGmEl = el("no-gm");
 
 // 0.9.10. Reported from play: in a room with no GM, a player presses + on Momentum,
@@ -495,7 +492,7 @@ function renderPool(pool, committed) {
 function render() {
   applyCompAtButtons();
   updateHint();
-  renderInitiative();
+  renderInitiativeHeader();
   renderPool("momentum", state.momentum ?? 0);
   renderPool("threat", state.threat ?? 0);
   document.querySelectorAll('[data-pool="threat"]').forEach((b) => { b.disabled = role !== "GM"; });
@@ -673,6 +670,11 @@ function setSegmented(containerId, active) {
 }
 
 function wireUI() {
+  // 1.4B. The Character box now decides which initiative row is yours, so a change
+  // to it has to redraw the party list. It had no listener at all before, because
+  // nothing outside the roll itself had ever read it.
+  charEl.addEventListener("input", () => { refreshParty(); });
+
   attrValEl.addEventListener("input", updateHint);
   skillValEl.addEventListener("input", updateHint);
   attrKeyEl.addEventListener("change", () => { syncValuesFromChar(); updateHint(); });
@@ -908,17 +910,66 @@ function readPartyMember(code) {
   return member;
 }
 
-function partyRow(member, status) {
+// 1.4B. ONE row renderer for everything in the list: a character, an adversary, and
+// either of those with a place in the initiative order. It was two panels for one
+// release and they printed the same four names side by side.
+//
+// `status` is null for an adversary — it has no epochs to be level with. `initRow` is
+// null when no round is running, which is what hides the whole initiative half.
+function partyRow(member, status, initRow, init) {
   const li = document.createElement("li");
   li.className = "party-row";
+  if (initRow?.acted) li.classList.add("is-acted");
 
   const head = document.createElement("div");
   head.className = "party-head";
 
-  const name = document.createElement("span");
+  if (initRow && role === "GM") {
+    const moves = document.createElement("span");
+    moves.className = "init-moves";
+    const at = init.rows.indexOf(initRow);
+    for (const [delta, glyph, label] of [[-1, "\u25b2", "Move up"], [1, "\u25bc", "Move down"]]) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost init-move";
+      btn.textContent = glyph;
+      btn.title = label;
+      btn.disabled = delta < 0 ? at <= 0 : at >= init.rows.length - 1;
+      btn.addEventListener("click", () => sendInit("move", { id: initRow.id, delta }));
+      moves.append(btn);
+    }
+    head.append(moves);
+  }
+
+  // 1.4B: the name IS the link to the sheet, which is what freed the room for the
+  // initiative controls. A separate "Sheet" button sat on every row spending space to
+  // say a second time what the name already identified.
+  const name = document.createElement(member.itemId ? "button" : "span");
   name.className = "party-name";
   name.textContent = member.name;
+  if (member.itemId) {
+    name.type = "button";
+    name.classList.add("is-link");
+    name.title = `Open ${member.name}'s sheet`;
+    name.addEventListener("click", () => openSheetFor(member.itemId));
+  }
+  if (member.kind === "npc") name.classList.add("is-npc");
   head.append(name);
+
+  if (member.kind === "npc") {
+    // An adversary has no Spirit, no exhaustion and no epochs. The row is its name
+    // and its place in the order, which is all it was ever asked to be.
+    appendHiddenMark(head, initRow);
+    appendInitControls(head, initRow, member);
+    li.append(head);
+    return li;
+  }
+
+  if (!partyStatsVisible()) {
+    appendInitControls(head, initRow, member);
+    li.append(head);
+    return li;
+  }
 
   const spirit = document.createElement("span");
   spirit.className = "party-spirit";
@@ -963,34 +1014,29 @@ function partyRow(member, status) {
   // — newly built, or attached to a token for the first time. It is not behind and
   // must not read as behind: there is nothing for it to catch up on, and the creator
   // will adopt the room's position silently the first time its sheet opens.
-  const badge = document.createElement("span");
-  const labels = { current: "Caught up", behind: "Behind", unsynced: "Not synced" };
-  const classes = { current: "is-current", behind: "is-behind", unsynced: "is-unsynced" };
-  badge.className = `party-status ${classes[status.state]}`;
-  badge.textContent = labels[status.state];
-  badge.title = status.state === "unsynced"
-    ? "Never synchronised to this room. Nothing to catch up on."
-    : status.state === "behind"
-      ? "Has not yet applied a boundary the table has passed."
-      : "Level with the room.";
-  head.append(badge);
-
-  // 0.9.2. Opens this character's sheet from the row. The GM otherwise has to find
-  // the token on the map, right-click it and pick the menu item — and the party panel
-  // is exactly where you are standing when you decide you need to look at someone.
-  if (member.itemId) {
-    const open = document.createElement("button");
-    open.className = "ghost party-open";
-    open.type = "button";
-    open.textContent = "Sheet";
-    open.title = `Open ${member.name}'s sheet`;
-    open.addEventListener("click", () => openSheetFor(member.itemId));
-    head.append(open);
+  //
+  // 1.4B: not drawn while a round is running. It answers "did my rest reach
+  // everyone", which is a between-scenes question, and it is the longest thing on the
+  // row — so during a fight it is the first thing worth spending on the controls.
+  if (status && !readInitiative(state)) {
+    const labels = { current: "Caught up", behind: "Behind", unsynced: "Not synced" };
+    const classes = { current: "is-current", behind: "is-behind", unsynced: "is-unsynced" };
+    const badge = document.createElement("span");
+    badge.className = `party-status ${classes[status.state]}`;
+    badge.textContent = labels[status.state];
+    badge.title = status.state === "unsynced"
+      ? "Never synchronised to this room. Nothing to catch up on."
+      : status.state === "behind"
+        ? "Has not yet applied a boundary the table has passed."
+        : "Level with the room.";
+    head.append(badge);
   }
 
+  appendHiddenMark(head, initRow);
+  appendInitControls(head, initRow, member);
   li.append(head);
 
-  if (status.state === "behind" && status.pending.length) {
+  if (status && !readInitiative(state) && status.state === "behind" && status.pending.length) {
     const detail = document.createElement("div");
     detail.className = "party-detail";
     detail.textContent = `Waiting on ${status.pending.map((k) => EPOCH_LABELS[k] || k).join(", ")}`;
@@ -998,6 +1044,88 @@ function partyRow(member, status) {
   }
 
   return li;
+}
+
+// The right-hand end of a row while a round is running. Split out because a character
+// row and an adversary row share it exactly, and they agree on nothing else.
+// Only the GM ever receives a hidden row, so this only ever draws for them — but it
+// is written as a check on the row rather than on the role, because the row not being
+// there is what actually keeps it from a player.
+function appendHiddenMark(head, initRow) {
+  if (!initRow?.hidden) return;
+  const mark = document.createElement("span");
+  mark.className = "init-hidden-mark";
+  mark.textContent = "hidden";
+  mark.title = "The table sees this row but not its name.";
+  head.append(mark);
+}
+
+// Appends the controls only when there ARE any. An empty flex child still occupies a
+// slot and counts as a zero-width child, which is the shape the layout suite is
+// watching for — and with no round running this div would be empty on every row.
+function appendInitControls(head, initRow, member) {
+  const actions = initControls(initRow, member);
+  if (actions.childElementCount) head.append(actions);
+}
+
+function initControls(initRow, member) {
+  const actions = document.createElement("div");
+  actions.className = "party-row-actions";
+  const init = readInitiative(state);
+
+  // No round running. A GM may still want a character's sheet, and that is the name.
+  if (!init) return actions;
+
+  // In the scene but not in the order — someone who arrived after the fight started.
+  // The GM gets one press to put them in rather than retyping a name that is already
+  // on screen; a player just sees they are not in it yet.
+  if (!initRow) {
+    if (role === "GM" && member.kind !== "npc" && member.itemId) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "ghost";
+      add.textContent = "+ Order";
+      add.title = "Put them into the initiative order";
+      add.addEventListener("click", () =>
+        sendInit("add", { id: initRowIdForCharacter(member.name), name: member.name, kind: "pc" }));
+      actions.append(add);
+    }
+    return actions;
+  }
+
+  if (mayToggleRow(initRow)) {
+    const act = document.createElement("button");
+    act.type = "button";
+    act.className = "ghost init-act";
+    act.textContent = initRow.acted ? "Undo" : "Acted";
+    act.addEventListener("click", () => sendInit("act", { id: initRow.id, acted: !initRow.acted }));
+    actions.append(act);
+  }
+
+  if (role === "GM") {
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.className = "ghost";
+    hide.textContent = initRow.hidden ? "Show" : "Hide";
+    hide.title = initRow.hidden
+      ? "Let the table see this name"
+      : "Keep this name from the table";
+    hide.addEventListener("click", () => toggleHidden(initRow));
+    actions.append(hide);
+
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.className = "ghost init-drop";
+    drop.textContent = "\u00d7";
+    drop.title = "Take out of the order";
+    drop.addEventListener("click", () => {
+      if (initRow.hidden) rememberHiddenName(initRow.id, null);
+      sendInit("remove", { id: initRow.id });
+    });
+    actions.append(drop);
+  }
+
+  return actions;
 }
 
 // Deliberately the same route the token context menu uses in background.js, now down
@@ -1022,18 +1150,51 @@ function safeStorage() {
   }
 }
 
+// 1.4B. One list. With no round running it is the party sorted by name, as it always
+// was. With a round running it is the ORDER — which means adversaries are in it, and
+// characters are wherever the GM put them rather than alphabetical.
+//
+// A character in the scene but not in the order is appended after it: they joined
+// late, or the GM took them out. They keep their stats and lose the ordering controls.
 function renderParty(members) {
   partyListEl.innerHTML = "";
-  if (!members.length) {
+  const init = readInitiative(state);
+  const roomEpochs = readEpochs(state);
+  const byId = new Map(members.map((m) => [initRowIdForCharacter(m.name), m]));
+
+  const rows = [];
+  if (init) {
+    // A hidden row reaches a player's client with no name and nothing to draw, so
+    // they simply do not get one. The GM sees it, named from their own storage.
+    for (const initRow of init.rows) {
+      if (initRow.hidden && role !== "GM") continue;
+      const member = byId.get(initRow.id);
+      rows.push(member
+        ? { member, status: epochStatus(member.char, roomEpochs), initRow }
+        : { member: { name: initRowName(initRow), kind: "npc" }, status: null, initRow });
+    }
+    for (const member of members) {
+      if (!init.rows.some((r) => r.id === initRowIdForCharacter(member.name))) {
+        rows.push({ member, status: epochStatus(member.char, roomEpochs), initRow: null });
+      }
+    }
+  } else {
+    for (const member of members) {
+      rows.push({ member, status: epochStatus(member.char, roomEpochs), initRow: null });
+    }
+  }
+
+  if (!rows.length) {
     const li = document.createElement("li");
     li.className = "party-empty";
-    li.textContent = "No characters attached to tokens in this scene.";
+    li.textContent = init
+      ? "Nobody in the order yet."
+      : "No characters attached to tokens in this scene.";
     partyListEl.append(li);
     return;
   }
-  const roomEpochs = readEpochs(state);
-  for (const member of members) {
-    partyListEl.append(partyRow(member, epochStatus(member.char, roomEpochs)));
+  for (const { member, status, initRow } of rows) {
+    partyListEl.append(partyRow(member, status, initRow, init));
   }
 }
 
@@ -1045,7 +1206,9 @@ async function refreshParty(items) {
   // it, and builds nothing when they have not — so a player's client never parses
   // characters it is not meant to be showing.
   if (standalone) return;
-  if (role !== "GM" && !partyIsShared()) return;
+  // 1.4B: a running round is reason enough to build the list, because the list IS
+  // the order now. The row renderer leaves the stats out when they are not shared.
+  if (role !== "GM" && !partyIsShared() && !readInitiative(state)) return;
   // 0.9.2: the token id travels with the code now, so a row can open that token's
   // sheet. It is also part of the signature, so dragging a NEW character into the
   // scene still redraws even if some other token carries an identical code.
@@ -1064,8 +1227,17 @@ async function refreshParty(items) {
   // entries carries each token's whole code string, and every edit to a character
   // rewrites that code — so exhaustion and injuries moving IS a signature change
   // already. Nothing extra is needed here, and adding it would only cost a parse.
+  // 1.4B: the initiative joins the signature. The list is now ORDERED by it and
+  // carries its adversaries, so a move, a tick or a new row has to redraw even
+  // though not one character changed.
   const roomEpochs = readEpochs(state);
-  const signature = JSON.stringify([entries, roomEpochs]);
+  const signature = JSON.stringify([
+    entries, roomEpochs, readInitiative(state), role,
+    // Who this client is. It decides which row gets an Acted button, so a player
+    // typing their character's name has to redraw the list — without this they get
+    // no button at all until some unrelated change happens to move the signature.
+    myRowIdentity(),
+  ]);
   if (signature === partySignature) return;
   partySignature = signature;
 
@@ -1133,8 +1305,14 @@ function initRowName(row) {
   return initRowLabel(row, { role, hiddenNames: readHiddenNames() });
 }
 
+// The character this client is speaking as: the selected token's if there is one,
+// otherwise whatever is typed in the Character box.
+function myRowIdentity() {
+  return activeChar?.snap?.name || charEl.value || "";
+}
+
 function mayToggleRow(row) {
-  return mayMarkRow(row, { role, myNameKey: activeChar?.snap?.name || charEl.value || "" });
+  return mayMarkRow(row, { role, myNameKey: myRowIdentity() });
 }
 
 function sendInit(action, extra = {}) {
@@ -1187,123 +1365,46 @@ function toggleHidden(row) {
   sendInit("hide", { id: row.id, hidden: next, name: next ? "" : name });
 }
 
-function renderInitiative() {
-  if (!initEl) return;
+// 1.4B. Only the header now — round number, Next Round, End. The rows themselves are
+// the party list, which is the whole point of the merge.
+function renderInitiativeHeader() {
   const init = readInitiative(state);
-  if (!init || standalone) {
-    initEl.hidden = true;
-    return;
-  }
-  initEl.hidden = false;
-
   const gm = role === "GM";
-  el("init-gm-controls").hidden = !gm;
-  el("init-add-row").hidden = !gm;
-  initRoundEl.textContent = `Round ${init.round}`;
+  const running = !!init && !standalone;
 
-  const allActed = initiativeAllActed(init);
-  const nextBtn = el("init-next");
-  if (nextBtn) {
-    // Lit, never automatic. The GM decides when a round is over, and a round that
-    // ended itself while someone was still deciding would be worse than no tracker.
-    nextBtn.classList.toggle("ready", allActed);
-    nextBtn.title = allActed
-      ? "Everyone has acted"
-      : "Some are still to act — you can still advance";
+  if (initRoundEl) {
+    initRoundEl.hidden = !running;
+    initRoundEl.textContent = running ? `Round ${init.round}` : "";
   }
-
-  initListEl.innerHTML = "";
-  const visible = gm ? init.rows : init.rows.filter((row) => !row.hidden);
-  for (const row of visible) {
-    initListEl.append(initRow(row, gm, init));
-  }
-  if (!visible.length) {
-    const li = document.createElement("li");
-    li.className = "init-empty";
-    li.textContent = gm ? "Nobody in the order yet." : "Waiting for the GM.";
-    initListEl.append(li);
-  }
-
-  const left = visible.filter((row) => !row.acted).length;
-  initNoteEl.textContent = left === 0
-    ? "Everyone has acted."
-    : left === 1 ? "1 still to act." : `${left} still to act.`;
-}
-
-function initRow(row, gm, init) {
-  const li = document.createElement("li");
-  li.className = "init-row";
-  if (row.acted) li.classList.add("is-acted");
-  if (row.hidden) li.classList.add("is-hidden-row");
-
-  if (gm) {
-    const moves = document.createElement("span");
-    moves.className = "init-moves";
-    for (const [delta, glyph, label] of [[-1, "\u25b2", "Move up"], [1, "\u25bc", "Move down"]]) {
-      const at = init.rows.indexOf(row);
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "ghost init-move";
-      btn.textContent = glyph;
-      btn.title = label;
-      btn.disabled = delta < 0 ? at === 0 : at === init.rows.length - 1;
-      btn.addEventListener("click", () => sendInit("move", { id: row.id, delta }));
-      moves.append(btn);
+  const next = el("init-next");
+  if (next) {
+    next.hidden = !running || !gm;
+    if (running) {
+      const allActed = initiativeAllActed(init);
+      // Lit, never automatic. The GM decides when a round is over; one that ended
+      // itself while somebody was still deciding would be worse than no tracker.
+      next.classList.toggle("ready", allActed);
+      next.title = allActed ? "Everyone has acted" : "Some are still to act — you can still advance";
     }
-    li.append(moves);
   }
+  const end = el("init-end");
+  if (end) end.hidden = !running || !gm;
+  const addRow = el("init-add-row");
+  if (addRow) addRow.hidden = !running || !gm;
 
-  const name = document.createElement("span");
-  name.className = "init-name";
-  name.textContent = initRowName(row);
-  if (row.kind === "npc") name.classList.add("is-npc");
-  li.append(name);
-
-  if (row.hidden) {
-    const mark = document.createElement("span");
-    mark.className = "init-hidden-mark";
-    mark.textContent = "hidden";
-    mark.title = "The table sees this row but not its name.";
-    li.append(mark);
+  const note = el("party-note");
+  if (note) {
+    if (!running) {
+      note.textContent = "A character catches up when its sheet is next opened. "
+        + "Not synced means the character has never met this room and has nothing to catch up on.";
+      return;
+    }
+    const counted = gm ? init.rows : init.rows.filter((row) => !row.hidden);
+    const left = counted.filter((row) => !row.acted).length;
+    note.textContent = left === 0
+      ? "Everyone has acted."
+      : left === 1 ? "1 still to act." : `${left} still to act.`;
   }
-
-  const actions = document.createElement("div");
-  actions.className = "init-row-actions";
-
-  if (mayToggleRow(row)) {
-    const act = document.createElement("button");
-    act.type = "button";
-    act.className = "ghost init-act";
-    act.textContent = row.acted ? "Undo" : "Acted";
-    act.addEventListener("click", () => sendInit("act", { id: row.id, acted: !row.acted }));
-    actions.append(act);
-  }
-
-  if (gm) {
-    const hide = document.createElement("button");
-    hide.type = "button";
-    hide.className = "ghost";
-    hide.textContent = row.hidden ? "Show" : "Hide";
-    hide.title = row.hidden
-      ? "Let the table see this name"
-      : "Keep this name from the table";
-    hide.addEventListener("click", () => toggleHidden(row));
-    actions.append(hide);
-
-    const drop = document.createElement("button");
-    drop.type = "button";
-    drop.className = "ghost init-drop";
-    drop.textContent = "\u00d7";
-    drop.title = "Take out of the order";
-    drop.addEventListener("click", () => {
-      if (row.hidden) rememberHiddenName(row.id, null);
-      sendInit("remove", { id: row.id });
-    });
-    actions.append(drop);
-  }
-
-  li.append(actions);
-  return li;
 }
 
 function wirePartyShare() {
@@ -1594,10 +1695,23 @@ function partyIsShared() {
   return state.partyShared !== false;
 }
 
+// Spirit, exhaustion, injuries and the epoch badge. A player sees them only when the
+// GM has shared them — a running round opens the panel so they can see the ORDER, and
+// must not smuggle the party's condition in with it.
+function partyStatsVisible() {
+  return role === "GM" || partyIsShared();
+}
+
 function applyPartyVisibility() {
   if (!partyPanel) return;
   const gm = role === "GM";
-  partyPanel.hidden = standalone || (!gm && !partyIsShared());
+  // 1.4B. Two separate questions, and folding the tracker into this panel made it
+  // easy to answer them as one by accident. Whether players see the party's Spirit
+  // and injuries is the GM's switch; whether they can see whose turn it is is not.
+  // A running round therefore opens the panel regardless, and the stat columns stay
+  // behind the switch — see partyStatsVisible().
+  const running = !!readInitiative(state);
+  partyPanel.hidden = standalone || (!gm && !partyIsShared() && !running);
   if (partyPanel.hidden && backupEl) backupEl.hidden = true;
 
   const backup = el("party-backup");
@@ -1705,11 +1819,12 @@ async function startInOwlbear() {
   OBR.room.onMetadataChange((meta) => {
     const found = meta[KEY];
     const wasShared = partyIsShared();
+    const wasRunning = !!readInitiative(state);
     state = found ? { ...structuredClone(EMPTY_STATE), ...found } : structuredClone(EMPTY_STATE);
     // The GM flipping the switch reaches everyone else as a metadata change and
     // nothing else, so the visibility has to be re-applied here or a player would
     // keep whatever they had until something unrelated redrew.
-    if (partyIsShared() !== wasShared) {
+    if (partyIsShared() !== wasShared || !!readInitiative(state) !== wasRunning) {
       applyPartyVisibility();
       // The signature guard would otherwise suppress the first draw for a client
       // that has never built the list.

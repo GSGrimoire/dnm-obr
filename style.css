@@ -516,18 +516,6 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
   min-height: 1em;
 }
 
-/* ============================================================
-   PARTY: OPEN SHEET (0.9.2)
-   ============================================================ */
-.party-open {
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  margin-left: 6px;
-  white-space: nowrap;
-}
 
 /* ============================================================
    COMPLICATION RANGE + MOMENTUM CLAIM (0.9.5)
@@ -637,50 +625,31 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
 }
 
 /* -------------------------------------------------------------
-   Initiative (1.4)
+   Initiative (1.4, folded into the party panel in 1.4B)
    -------------------------------------------------------------
-   Shown to the whole table, not just the GM, so it sits outside .gm-panel and
-   carries no GM colouring of its own. */
-.initiative {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  padding: 9px 10px;
-}
+   There is no initiative panel any more — these style the initiative half of a
+   party row, and the round controls in the party header. */
 .init-round {
   font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em;
   color: var(--teal); border: 1px solid var(--teal-dim); padding: 1px 5px;
+  flex: none;
 }
-.init-controls { display: flex; gap: 4px; align-items: center; }
-/* Lit when everyone has acted. It never fires on its own — a round that ended
-   itself while someone was still deciding would be worse than no tracker — so this
-   is an invitation, not a state. */
+.init-next { font-size: 10px; padding: 2px 6px; flex: none; }
+/* Lit when everyone has acted. It never fires on its own — a round that ended itself
+   while someone was still deciding would be worse than no tracker — so this is an
+   invitation, not a state. */
 .gm-btn.ready {
   border-color: var(--teal); color: var(--bg); background: var(--teal);
   box-shadow: 0 0 8px var(--teal-glow);
 }
-.init-list { list-style: none; max-height: clamp(120px, 24vh, 460px); overflow-y: auto; }
-.init-row {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  border-top: 1px solid var(--border); padding: 5px 0;
-}
-.init-row:first-child { border-top: none; }
-/* Done. Dimmed rather than struck through or reordered: the row has to stay where
-   it is so the order still reads, and it has to stay legible so the GM can undo it. */
-.init-row.is-acted .init-name { color: var(--text-dim); opacity: .55; }
-.init-name {
-  font-family: var(--font-display); font-size: 13px; font-weight: 700;
-  letter-spacing: .04em; color: var(--text-bright);
-  /* Same floor every other row in this panel needs: with overflow hidden its
-     automatic minimum size is 0, so without it the name collapses and the buttons
-     sit on top of where it was. */
-  flex: 1 1 8ch; min-width: 8ch;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.init-name.is-npc { color: var(--accent); }
+/* Done. Dimmed rather than struck through or reordered: the row has to stay where it
+   is so the order still reads, and legible so the GM can undo it. */
+.party-row.is-acted .party-name { color: var(--text-dim); opacity: .55; }
+.party-row.is-acted .party-spirit,
+.party-row.is-acted .party-exhaustion,
+.party-row.is-acted .party-injuries { opacity: .55; }
 .init-moves { display: inline-flex; flex-direction: column; gap: 1px; flex: none; }
-.init-move {
-  font-size: 8px; line-height: 1; padding: 1px 3px; letter-spacing: 0;
-}
+.init-move { font-size: 8px; line-height: 1; padding: 1px 3px; letter-spacing: 0; }
 .init-move:disabled { opacity: .25; cursor: default; }
 .init-move:disabled:hover { color: var(--text-dim); }
 .init-hidden-mark {
@@ -688,10 +657,9 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
   border: 1px solid var(--warning); border-radius: 2px; padding: 0 3px;
   flex: none; cursor: help;
 }
-.init-row-actions { display: flex; gap: 3px; flex: none; margin-left: auto; }
-.init-row-actions .ghost { padding: 2px 4px; }
+.party-row-actions { display: flex; gap: 3px; flex: none; margin-left: auto; }
+.party-row-actions .ghost { padding: 2px 4px; }
 .init-drop { color: var(--accent); }
-.init-empty { color: var(--text-dim); font-style: italic; padding: 6px 0; font-size: 12px; }
 .init-add { margin-top: 6px; }
 .init-add-input {
   width: 100%;
@@ -700,6 +668,18 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
   font-family: var(--font-body); font-size: 12px;
 }
 .init-add-input:focus { border-style: solid; border-color: var(--border-bright); outline: none; }
+
+/* 1.4B: the name is the link to the sheet now, which is what freed the room on the
+   row for the initiative controls. Styled as the name it already was — a button
+   that looks like a button would just be the old Sheet button wearing a new label. */
+.party-name.is-link {
+  background: none; border: none; padding: 0; margin: 0;
+  text-align: left; cursor: pointer; font: inherit;
+  font-family: var(--font-display); font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text-bright);
+}
+.party-name.is-link:hover { color: var(--teal); text-decoration: underline; }
+.party-name.is-npc { color: var(--accent); }
 
 /* The GM's switch for whether the table can see the party panel. */
 .party-share.is-on { color: var(--teal); }
