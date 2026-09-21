@@ -27,6 +27,8 @@ import {
   ROOM_KEY as KEY, CHANNEL, CHAR_KEY, ATTRS, SKILLS, EMPTY_STATE, EPOCH_KEYS,
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
   readRecovery, writeRecovery, visibleRecovery, characterTokens,
+  readInitiative, initiativeAllActed, MAX_INITIATIVE_ROWS, INITIATIVE_NAME_MAX,
+  ID, mayMarkRow, initRowLabel, initRowIdForCharacter,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
 } from "./dnm.js";
@@ -80,6 +82,10 @@ const recoveryCountEl = el("recovery-count");
 const backupEl = el("backup");
 const backupTextEl = el("backup-text");
 const backupSummaryEl = el("backup-summary");
+const initEl = el("initiative");
+const initListEl = el("init-list");
+const initRoundEl = el("init-round");
+const initNoteEl = el("init-note");
 const noGmEl = el("no-gm");
 
 // 0.9.10. Reported from play: in a room with no GM, a player presses + on Momentum,
@@ -489,6 +495,7 @@ function renderPool(pool, committed) {
 function render() {
   applyCompAtButtons();
   updateHint();
+  renderInitiative();
   renderPool("momentum", state.momentum ?? 0);
   renderPool("threat", state.threat ?? 0);
   document.querySelectorAll('[data-pool="threat"]').forEach((b) => { b.disabled = role !== "GM"; });
@@ -1034,7 +1041,11 @@ function renderParty(members) {
 // it through avoids a round trip. Without it we fetch, which is the path used on
 // open and whenever room metadata changes underneath us.
 async function refreshParty(items) {
-  if (role !== "GM" || standalone) return;
+  // 1.4: not GM-only any more. A player builds the same list when the GM has shared
+  // it, and builds nothing when they have not — so a player's client never parses
+  // characters it is not meant to be showing.
+  if (standalone) return;
+  if (role !== "GM" && !partyIsShared()) return;
   // 0.9.2: the token id travels with the code now, so a row can open that token's
   // sheet. It is also part of the signature, so dragging a NEW character into the
   // scene still redraws even if some other token carries an identical code.
@@ -1072,6 +1083,268 @@ async function refreshParty(items) {
 }
 
 // -------------------------------------------------------------
+// Initiative (1.4)
+// -------------------------------------------------------------
+// The table does not play in a strict order — anyone who has not gone may go — so this
+// tracks WHO IS LEFT rather than whose turn it is. Greyed out means done.
+//
+// Everyone sees it. The GM gets the controls; a player gets the list and a button on
+// their own row. Rows the GM has hidden are not in room metadata at all, so a player's
+// client has nothing to draw even if it wanted to.
+//
+// HIDDEN NAMES LIVE IN THE GM's BROWSER, not in the room. Room metadata is readable by
+// every client, so a name published there is public whatever the interface draws —
+// the same reason the hidden roll log is kept in localStorage. This is the lookup that
+// puts the names back for the GM alone.
+function hiddenNamesKey() {
+  let room = "unknown";
+  try { room = OBR.room.id; } catch (err) { /* standalone */ }
+  return `${ID}/initnames/${room}`;
+}
+
+function readHiddenNames() {
+  const storage = safeStorage();
+  if (!storage) return {};
+  try {
+    const found = JSON.parse(storage.getItem(hiddenNamesKey()) || "{}");
+    return found && typeof found === "object" && !Array.isArray(found) ? found : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function rememberHiddenName(id, name) {
+  const storage = safeStorage();
+  if (!storage) return;
+  const all = readHiddenNames();
+  if (name) all[id] = String(name).slice(0, INITIATIVE_NAME_MAX);
+  else delete all[id];
+  try {
+    storage.setItem(hiddenNamesKey(), JSON.stringify(all));
+  } catch (err) {
+    console.warn("[dnm] could not remember that name", err);
+  }
+}
+
+// Both rules live in dnm.js, where party.test.mjs can reach them. This file only
+// supplies the two things it alone knows: which seat this client is in, and what is
+// in its own storage.
+function initRowName(row) {
+  return initRowLabel(row, { role, hiddenNames: readHiddenNames() });
+}
+
+function mayToggleRow(row) {
+  return mayMarkRow(row, { role, myNameKey: activeChar?.snap?.name || charEl.value || "" });
+}
+
+function sendInit(action, extra = {}) {
+  return announce({ type: "init", action, ...extra });
+}
+
+// Starting seeds the tracker from the characters already on tokens, because that is
+// the party and typing them in would be the first thing anyone complained about.
+async function startInitiative() {
+  if (role !== "GM") return;
+  await sendInit("start");
+  try {
+    const items = await OBR.scene.items.getItems();
+    for (const { code } of characterTokens(items)) {
+      const name = nameForCode(code);
+      if (!name) continue;
+      // Keyed on the name, the same identity the roll merge and the recovery list
+      // use, so one character on two tokens is still one row in the order.
+      await sendInit("add", { id: initRowIdForCharacter(name), name, kind: "pc" });
+    }
+  } catch (err) {
+    console.error("[dnm] could not read the scene to seed initiative", err);
+  }
+  setStatus("Initiative started.");
+}
+
+function addAdversary(name) {
+  const clean = String(name || "").trim().slice(0, INITIATIVE_NAME_MAX);
+  if (!clean) return;
+  const init = readInitiative(state);
+  if (init && init.rows.length >= MAX_INITIATIVE_ROWS) {
+    setStatus("That is as many rows as the tracker holds.");
+    return;
+  }
+  sendInit("add", {
+    id: "npc:" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name: clean,
+    kind: "npc",
+  });
+}
+
+function toggleHidden(row) {
+  if (role !== "GM") return;
+  const next = !row.hidden;
+  const name = initRowName(row);
+  // Remembered BEFORE the event goes out, because the event is what erases the name
+  // from the room — after it, there is nothing left to remember.
+  if (next) rememberHiddenName(row.id, name);
+  else rememberHiddenName(row.id, null);
+  sendInit("hide", { id: row.id, hidden: next, name: next ? "" : name });
+}
+
+function renderInitiative() {
+  if (!initEl) return;
+  const init = readInitiative(state);
+  if (!init || standalone) {
+    initEl.hidden = true;
+    return;
+  }
+  initEl.hidden = false;
+
+  const gm = role === "GM";
+  el("init-gm-controls").hidden = !gm;
+  el("init-add-row").hidden = !gm;
+  initRoundEl.textContent = `Round ${init.round}`;
+
+  const allActed = initiativeAllActed(init);
+  const nextBtn = el("init-next");
+  if (nextBtn) {
+    // Lit, never automatic. The GM decides when a round is over, and a round that
+    // ended itself while someone was still deciding would be worse than no tracker.
+    nextBtn.classList.toggle("ready", allActed);
+    nextBtn.title = allActed
+      ? "Everyone has acted"
+      : "Some are still to act — you can still advance";
+  }
+
+  initListEl.innerHTML = "";
+  const visible = gm ? init.rows : init.rows.filter((row) => !row.hidden);
+  for (const row of visible) {
+    initListEl.append(initRow(row, gm, init));
+  }
+  if (!visible.length) {
+    const li = document.createElement("li");
+    li.className = "init-empty";
+    li.textContent = gm ? "Nobody in the order yet." : "Waiting for the GM.";
+    initListEl.append(li);
+  }
+
+  const left = visible.filter((row) => !row.acted).length;
+  initNoteEl.textContent = left === 0
+    ? "Everyone has acted."
+    : left === 1 ? "1 still to act." : `${left} still to act.`;
+}
+
+function initRow(row, gm, init) {
+  const li = document.createElement("li");
+  li.className = "init-row";
+  if (row.acted) li.classList.add("is-acted");
+  if (row.hidden) li.classList.add("is-hidden-row");
+
+  if (gm) {
+    const moves = document.createElement("span");
+    moves.className = "init-moves";
+    for (const [delta, glyph, label] of [[-1, "\u25b2", "Move up"], [1, "\u25bc", "Move down"]]) {
+      const at = init.rows.indexOf(row);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost init-move";
+      btn.textContent = glyph;
+      btn.title = label;
+      btn.disabled = delta < 0 ? at === 0 : at === init.rows.length - 1;
+      btn.addEventListener("click", () => sendInit("move", { id: row.id, delta }));
+      moves.append(btn);
+    }
+    li.append(moves);
+  }
+
+  const name = document.createElement("span");
+  name.className = "init-name";
+  name.textContent = initRowName(row);
+  if (row.kind === "npc") name.classList.add("is-npc");
+  li.append(name);
+
+  if (row.hidden) {
+    const mark = document.createElement("span");
+    mark.className = "init-hidden-mark";
+    mark.textContent = "hidden";
+    mark.title = "The table sees this row but not its name.";
+    li.append(mark);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "init-row-actions";
+
+  if (mayToggleRow(row)) {
+    const act = document.createElement("button");
+    act.type = "button";
+    act.className = "ghost init-act";
+    act.textContent = row.acted ? "Undo" : "Acted";
+    act.addEventListener("click", () => sendInit("act", { id: row.id, acted: !row.acted }));
+    actions.append(act);
+  }
+
+  if (gm) {
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.className = "ghost";
+    hide.textContent = row.hidden ? "Show" : "Hide";
+    hide.title = row.hidden
+      ? "Let the table see this name"
+      : "Keep this name from the table";
+    hide.addEventListener("click", () => toggleHidden(row));
+    actions.append(hide);
+
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.className = "ghost init-drop";
+    drop.textContent = "\u00d7";
+    drop.title = "Take out of the order";
+    drop.addEventListener("click", () => {
+      if (row.hidden) rememberHiddenName(row.id, null);
+      sendInit("remove", { id: row.id });
+    });
+    actions.append(drop);
+  }
+
+  li.append(actions);
+  return li;
+}
+
+function wirePartyShare() {
+  const share = el("party-share");
+  if (!share) return;
+  share.addEventListener("click", () => {
+    if (role !== "GM") return;
+    announce({ type: "partyShared", value: !partyIsShared() });
+  });
+}
+
+function wireInitiative() {
+  const start = el("init-start");
+  if (start) start.addEventListener("click", startInitiative);
+  const next = el("init-next");
+  if (next) next.addEventListener("click", () => sendInit("next"));
+  const end = el("init-end");
+  if (end) {
+    end.addEventListener("click", () => {
+      // Every hidden name in this room goes with it. They name adversaries in a fight
+      // that is now over, and leaving them behind would have the next fight's row 3
+      // inherit the last one's name.
+      const storage = safeStorage();
+      if (storage) { try { storage.removeItem(hiddenNamesKey()); } catch (err) { /* blocked */ } }
+      sendInit("end");
+    });
+  }
+  const add = el("init-add");
+  if (add) {
+    add.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      ev.preventDefault();
+      addAdversary(add.value);
+      // Cleared rather than a fresh element: the input IS the always-present blank
+      // row, so emptying it is what makes the next one appear.
+      add.value = "";
+    });
+  }
+}
+
+// -------------------------------------------------------------
 // Lost characters, and backups (1.3)
 // -------------------------------------------------------------
 // The buffer itself is filled by background.js, which runs for the whole room
@@ -1098,6 +1371,8 @@ function nameForCode(code) {
 
 function renderRecovery(items) {
   if (!recoveryEl) return;
+  // GM only even when the panel around it is shared: restoring a character is not a
+  // thing a player should be able to do to somebody else's.
   if (role !== "GM" || standalone) { recoveryEl.hidden = true; return; }
   if (items) lastRecoveryItems = items;
 
@@ -1305,10 +1580,40 @@ function wireBackup() {
   if (close) close.addEventListener("click", () => { backupEl.hidden = true; });
 }
 
+// 1.4. The panel is no longer the GM's alone. It shows Spirit, exhaustion and injury
+// counts for the whole party, and the table asked to see it — knowing where everyone
+// stands is what makes a player lean in rather than wait to be told.
+//
+// It is a switch rather than simply public, because that is the GM's call to make per
+// room, and the state lives in room metadata so every client agrees about it.
+//
+// The GM-only PARTS stay GM-only whatever the switch says: Back up reads every
+// character in the scene, and Lost characters could hand someone a copy of a character
+// that is not theirs.
+function partyIsShared() {
+  return state.partyShared !== false;
+}
+
 function applyPartyVisibility() {
   if (!partyPanel) return;
-  partyPanel.hidden = role !== "GM" || standalone;
+  const gm = role === "GM";
+  partyPanel.hidden = standalone || (!gm && !partyIsShared());
   if (partyPanel.hidden && backupEl) backupEl.hidden = true;
+
+  const backup = el("party-backup");
+  if (backup) backup.hidden = !gm;
+  const share = el("party-share");
+  if (share) {
+    share.hidden = !gm;
+    share.textContent = partyIsShared() ? "Shared" : "GM only";
+    share.classList.toggle("is-on", partyIsShared());
+    share.title = partyIsShared()
+      ? "The players can see this panel. Press to keep it to yourself."
+      : "Only you can see this panel. Press to share it with the table.";
+  }
+  const badge = partyPanel.querySelector(".gm-badge");
+  if (badge) badge.hidden = partyIsShared();
+
   renderRecovery();
 }
 
@@ -1327,6 +1632,8 @@ async function startInOwlbear() {
   applyRole();
   wireGmPanel();
   wireBackup();
+  wireInitiative();
+  wirePartyShare();
   await refreshHasGM();
 
   await load();
@@ -1397,7 +1704,17 @@ async function startInOwlbear() {
 
   OBR.room.onMetadataChange((meta) => {
     const found = meta[KEY];
+    const wasShared = partyIsShared();
     state = found ? { ...structuredClone(EMPTY_STATE), ...found } : structuredClone(EMPTY_STATE);
+    // The GM flipping the switch reaches everyone else as a metadata change and
+    // nothing else, so the visibility has to be re-applied here or a player would
+    // keep whatever they had until something unrelated redrew.
+    if (partyIsShared() !== wasShared) {
+      applyPartyVisibility();
+      // The signature guard would otherwise suppress the first draw for a client
+      // that has never built the list.
+      partySignature = null;
+    }
     // The room's own number has arrived, so what the batcher was promising is now
     // real. Settled before the render, or the display would add it on twice.
     poolBatch.settle();

@@ -301,7 +301,7 @@ export function writeDock(storage, dock) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.3";
+export const EXT_VERSION = "1.4";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
@@ -317,11 +317,195 @@ export const CHANNEL = `${ID}/events`;
 // for the sheet they belong to. Same defaulting rule again: a room written before
 // 0.9.6 has no bonds key, and a reader must treat that as an empty queue.
 export const EMPTY_STATE = {
-  v: 4, momentum: 0, threat: 0, log: [],
+  v: 5, momentum: 0, threat: 0, log: [],
   epochs: { scene: 0, session: 0, adventure: 0, breather: 0, break: 0, bed: 0 },
   compAt: 20,
   bonds: [],
+  // 1.4. Absent until the GM starts a round, and removed again when they end one.
+  initiative: null,
+  // 1.4. Whether players may see the party panel. The GM's switch, stored in the room
+  // so every client agrees. It defaults to SHARED because that is what this table
+  // asked for; the alternative would have been to keep the old GM-only behaviour and
+  // make the GM find a switch to get what they said they wanted.
+  partyShared: true,
 };
+
+// -------------------------------------------------------------
+// Initiative (1.4)
+// -------------------------------------------------------------
+// Who has acted this round, and which round it is. Lives in room metadata alongside
+// the epochs, for the same reason: every client has to agree, and it has to survive
+// a reload in the middle of a fight.
+//
+// WHY ROWS RATHER THAN A TURN POINTER: the table does not play in a strict order.
+// Anyone who has not acted may go, and the tracker's job is to say who is left, not
+// to say who is next. A pointer would be a rule the game does not have.
+//
+// HIDDEN ROWS, AND WHAT HIDING ACTUALLY MEANS:
+// Players see the tracker, which is the point of it. The GM can hide a row so the
+// table cannot see an adversary's name. A hidden row keeps its id, its position and
+// its acted flag in room metadata — but NOT its name, which is never published at
+// all. The GM's own client holds the names locally.
+//
+// That split is deliberate and follows the concealed-roll precedent: room metadata is
+// readable by every client in the room, so anything published there is public no
+// matter what the interface draws. A secret that lives in room metadata is not a
+// secret. The hidden log is kept in the GM's localStorage for exactly this reason,
+// and hidden row names are kept the same way.
+//
+// What IS still visible to a player is that a hidden row exists and whether it has
+// acted. That is correct: in a fight you can see something is taking its turn.
+export const MAX_INITIATIVE_ROWS = 24;
+export const INITIATIVE_NAME_MAX = 32;
+export const INITIATIVE_ACTIONS = new Set([
+  "start", "end", "next", "add", "remove", "move", "hide", "act",
+]);
+
+export function emptyInitiative() {
+  return { round: 1, rows: [] };
+}
+
+// Untrusted on the way out, like every other read of shared state: this arrives from
+// room metadata, which any client in the room can be tricked into writing through a
+// forged broadcast, and it is rendered in a loop.
+export function readInitiative(state) {
+  const found = state && state.initiative;
+  if (!found || typeof found !== "object") return null;
+  const round = Math.max(1, Math.min(999, Math.round(Number(found.round) || 1)));
+  const rows = (Array.isArray(found.rows) ? found.rows : [])
+    .filter((row) => row && typeof row === "object" && row.id)
+    .slice(0, MAX_INITIATIVE_ROWS)
+    .map((row) => ({
+      id: cleanText(row.id, 40),
+      // A hidden row's name is empty BY CONSTRUCTION — it was never published. This
+      // clamp is not what makes it secret; not writing it is.
+      name: row.hidden ? "" : cleanText(row.name, INITIATIVE_NAME_MAX),
+      kind: row.kind === "npc" ? "npc" : "pc",
+      acted: !!row.acted,
+      hidden: !!row.hidden,
+    }))
+    .filter((row) => row.id);
+  return { round, rows };
+}
+
+// What a player is allowed to see. The GM merges their local names back over this.
+export function publicInitiative(init) {
+  if (!init) return null;
+  return { round: init.round, rows: init.rows.map((row) => ({ ...row })) };
+}
+
+export function initiativeAllActed(init) {
+  const rows = init && Array.isArray(init.rows) ? init.rows : [];
+  return rows.length > 0 && rows.every((row) => row.acted);
+}
+
+// Who may tick a row. This lives here rather than in roller.js for the same reason
+// isGmOnlyEvent() does: it is a rule about who may do what, and a rule nobody can test
+// is a rule nobody can trust.
+//
+// Be clear about what it is. It is a COURTESY, not a control. It runs in the sender's
+// own tab, and background.js — the only real check in the system — has no map from a
+// connection id to a character, so it cannot tell whether a sender owns the row they
+// just ticked. This stops a misclick. A forged tick is one GM press to undo, which is
+// why it is not worth building the connection-to-character binding that would make it
+// airtight.
+export function mayMarkRow(row, { role, myNameKey } = {}) {
+  if (!row) return false;
+  if (role === "GM") return true;
+  // A player never ticks an adversary, and never ticks a row whose name they cannot
+  // even see — there is no way for them to know whose it is.
+  if (row.kind !== "pc" || row.hidden) return false;
+  const mine = bondNameKey(myNameKey || "");
+  return !!mine && row.id === "pc:" + mine;
+}
+
+// What to draw in a row's name. A hidden row published no name at all, so for the GM
+// it can only come from their own browser — and when it cannot, this says so rather
+// than inventing one.
+export function initRowLabel(row, { role, hiddenNames } = {}) {
+  if (!row) return "";
+  if (!row.hidden) return row.name || "Unnamed";
+  if (role !== "GM") return "Hidden";
+  const found = hiddenNames && hiddenNames[row.id];
+  return found ? String(found).slice(0, INITIATIVE_NAME_MAX) : "Hidden";
+}
+
+// The id a character's row carries. One character on two tokens is still one row,
+// which is why this is the name key and not a token id.
+export function initRowIdForCharacter(name) {
+  const key = bondNameKey(name);
+  return key ? "pc:" + key : "";
+}
+
+// Every mutation goes through here so the reducer stays a switch rather than a pile of
+// array surgery, and so the same rules can be tested without a room.
+export function applyInitiativeAction(init, ev) {
+  const current = init || emptyInitiative();
+  const rows = current.rows.slice();
+  const indexOf = (id) => rows.findIndex((row) => row.id === id);
+
+  switch (ev.action) {
+    case "start":
+      return emptyInitiative();
+    case "end":
+      return null;
+    case "next":
+      // Clearing acted is the whole of a new round. Rows, order and hidden flags all
+      // survive, because the fight has not changed — only the round has.
+      return {
+        round: Math.min(999, current.round + 1),
+        rows: rows.map((row) => ({ ...row, acted: false })),
+      };
+    case "add": {
+      if (rows.length >= MAX_INITIATIVE_ROWS) return current;
+      const id = cleanText(ev.id, 40);
+      if (!id || indexOf(id) >= 0) return current;
+      rows.push({
+        id,
+        name: cleanText(ev.name, INITIATIVE_NAME_MAX),
+        kind: ev.kind === "npc" ? "npc" : "pc",
+        acted: false,
+        hidden: false,
+      });
+      return { ...current, rows };
+    }
+    case "remove": {
+      const at = indexOf(cleanText(ev.id, 40));
+      if (at < 0) return current;
+      rows.splice(at, 1);
+      return { ...current, rows };
+    }
+    case "move": {
+      const at = indexOf(cleanText(ev.id, 40));
+      const delta = Math.round(Number(ev.delta) || 0);
+      if (at < 0 || !delta) return current;
+      const to = at + (delta > 0 ? 1 : -1);
+      // Clamped rather than wrapped: pressing up on the top row should do nothing,
+      // not send it to the bottom.
+      if (to < 0 || to >= rows.length) return current;
+      const [moved] = rows.splice(at, 1);
+      rows.splice(to, 0, moved);
+      return { ...current, rows };
+    }
+    case "hide": {
+      const at = indexOf(cleanText(ev.id, 40));
+      if (at < 0) return current;
+      const hidden = !!ev.hidden;
+      // Hiding DROPS the name from the published row rather than flagging it. The GM
+      // keeps it locally; nothing readable in the room ever held it once this ran.
+      rows[at] = { ...rows[at], hidden, name: hidden ? "" : cleanText(ev.name, INITIATIVE_NAME_MAX) };
+      return { ...current, rows };
+    }
+    case "act": {
+      const at = indexOf(cleanText(ev.id, 40));
+      if (at < 0) return current;
+      rows[at] = { ...rows[at], acted: !!ev.acted };
+      return { ...current, rows };
+    }
+    default:
+      return current;
+  }
+}
 
 // The range the GM may choose from. Below 15 a d20 would complicate more often than
 // not, which stops being a difficult scene and starts being a broken one.
@@ -743,7 +927,7 @@ export function createPoolBatcher(send, opts = {}) {
 // The creator's own tooltip had it right all along — "Anyone can add; only the GM
 // should spend" — so what is privileged is the DIRECTION, not the pool. A player can
 // pay Threat in and cannot drain it.
-const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt"]);
+const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt", "partyShared"]);
 
 export function isGmOnlyEvent(ev) {
   if (!ev || typeof ev !== "object") return false;
@@ -754,6 +938,18 @@ export function isGmOnlyEvent(ev) {
   // the table on nobody's authority. It is cheap to put it behind the real check, so
   // it goes behind the real check.
   if (ev.type === "bond") return ev.effect?.kind === "drive";
+  // 1.4. Running the round is the GM's: starting, ending, adding, removing, ordering
+  // and hiding all reach every client and none of them is a thing a player does.
+  //
+  // Marking a turn ended is NOT privileged, and that is a considered choice. Players
+  // mark themselves, which is the participatory half of the feature. The rule "a
+  // player may only mark their own row" cannot be enforced here — this page verifies
+  // connection ids against the room's GMs and has no map from a connection to a
+  // character, so it cannot tell whether a sender owns the row they just ticked. The
+  // sender-side check stops an honest misclick; a forged one is one GM click to undo.
+  // That is the same reasoning bond effects run on, and the cost of making it airtight
+  // (a connection-to-character binding) is out of proportion to a reversible tick.
+  if (ev.type === "init") return ev.action !== "act";
   // Momentum is the group's pool and stays open to everyone, both directions.
   if (ev.type !== "pool" || ev.pool !== "threat") return false;
   return (Math.round(Number(ev.delta) || 0)) < 0;
@@ -818,6 +1014,10 @@ export function applyEvent(state, ev) {
     const epochs = readEpochs(next);
     epochs[ev.boundary] = epochs[ev.boundary] + 1;
     next.epochs = epochs;
+    // 1.4. A scene boundary ends the fight, so it ends the round tracking with it.
+    // Only End Scene, and not the rests: a Breather happens DURING a fight and
+    // clearing the tracker under the table mid-combat would be worse than useless.
+    if (ev.boundary === "scene") next.initiative = null;
     // The press is logged like any other action so the table sees who called the rest.
     const entry = sanitizeEntry(ev.entry);
     if (entry && !next.log.some((e) => e.id === entry.id)) {
@@ -850,6 +1050,10 @@ export function applyEvent(state, ev) {
     // Assignment, not increment: the GM is choosing a value, and two GM windows
     // settling on the same number is the correct outcome rather than a conflict.
     next.compAt = Math.max(COMP_AT_MIN, Math.min(COMP_AT_MAX, Math.round(Number(ev.value) || COMP_AT_MAX)));
+  } else if (ev?.type === "init" && INITIATIVE_ACTIONS.has(ev.action)) {
+    next.initiative = applyInitiativeAction(readInitiative(next), ev);
+  } else if (ev?.type === "partyShared") {
+    next.partyShared = !!ev.value;
   } else if (ev?.type === "clear") {
     next.log = [];
   }
@@ -863,6 +1067,21 @@ export function trimState(state) {
   // would send every sheet backwards and re-apply a boundary the table already had.
   next.epochs = readEpochs(next);
   next.compAt = readCompAt(next);
+  // 1.4. The spread above already CARRIES the initiative through, so this is not
+  // what keeps it alive — the loop below only pops log entries. What this does is
+  // NORMALISE it, and that is the part that matters here.
+  //
+  // The loop stops at one log entry. A forged initiative carrying two thousand rows
+  // would therefore sit in the state, the log would be stripped to nothing trying to
+  // make room, and the write would still blow the 16 kB budget — which breaks room
+  // metadata for every other extension in the room, not just this one. Clamping it
+  // on the way through is the same discipline the log entry fields already follow.
+  //
+  // partyShared defaults to true for a room written before 1.4, which has no such
+  // key. Reading a missing flag as false would silently put the switch in the
+  // opposite position from the documented default.
+  next.initiative = readInitiative(next);
+  next.partyShared = next.partyShared !== false;
   // 0.9.6. Pending bond effects are trimmed by age and count here, and then left
   // alone by the loop below. They are a dozen small objects at most, and unlike a log
   // line an undrained one still owes somebody a Spirit — so the log gives way to them

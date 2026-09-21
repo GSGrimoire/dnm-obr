@@ -635,3 +635,71 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
   padding: 6px;
   resize: vertical;
 }
+
+/* -------------------------------------------------------------
+   Initiative (1.4)
+   -------------------------------------------------------------
+   Shown to the whole table, not just the GM, so it sits outside .gm-panel and
+   carries no GM colouring of its own. */
+.initiative {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 9px 10px;
+}
+.init-round {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em;
+  color: var(--teal); border: 1px solid var(--teal-dim); padding: 1px 5px;
+}
+.init-controls { display: flex; gap: 4px; align-items: center; }
+/* Lit when everyone has acted. It never fires on its own — a round that ended
+   itself while someone was still deciding would be worse than no tracker — so this
+   is an invitation, not a state. */
+.gm-btn.ready {
+  border-color: var(--teal); color: var(--bg); background: var(--teal);
+  box-shadow: 0 0 8px var(--teal-glow);
+}
+.init-list { list-style: none; max-height: clamp(120px, 24vh, 460px); overflow-y: auto; }
+.init-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  border-top: 1px solid var(--border); padding: 5px 0;
+}
+.init-row:first-child { border-top: none; }
+/* Done. Dimmed rather than struck through or reordered: the row has to stay where
+   it is so the order still reads, and it has to stay legible so the GM can undo it. */
+.init-row.is-acted .init-name { color: var(--text-dim); opacity: .55; }
+.init-name {
+  font-family: var(--font-display); font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text-bright);
+  /* Same floor every other row in this panel needs: with overflow hidden its
+     automatic minimum size is 0, so without it the name collapses and the buttons
+     sit on top of where it was. */
+  flex: 1 1 8ch; min-width: 8ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.init-name.is-npc { color: var(--accent); }
+.init-moves { display: inline-flex; flex-direction: column; gap: 1px; flex: none; }
+.init-move {
+  font-size: 8px; line-height: 1; padding: 1px 3px; letter-spacing: 0;
+}
+.init-move:disabled { opacity: .25; cursor: default; }
+.init-move:disabled:hover { color: var(--text-dim); }
+.init-hidden-mark {
+  font-family: var(--font-mono); font-size: 9px; color: var(--warning);
+  border: 1px solid var(--warning); border-radius: 2px; padding: 0 3px;
+  flex: none; cursor: help;
+}
+.init-row-actions { display: flex; gap: 3px; flex: none; margin-left: auto; }
+.init-row-actions .ghost { padding: 2px 4px; }
+.init-drop { color: var(--accent); }
+.init-empty { color: var(--text-dim); font-style: italic; padding: 6px 0; font-size: 12px; }
+.init-add { margin-top: 6px; }
+.init-add-input {
+  width: 100%;
+  background: var(--bg); color: var(--text);
+  border: 1px dashed var(--border); padding: 5px 6px;
+  font-family: var(--font-body); font-size: 12px;
+}
+.init-add-input:focus { border-style: solid; border-color: var(--border-bright); outline: none; }
+
+/* The GM's switch for whether the table can see the party panel. */
+.party-share.is-on { color: var(--teal); }
