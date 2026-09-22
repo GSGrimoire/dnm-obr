@@ -17,7 +17,7 @@
 // =============================================================
 
 import OBR from "./sdk.js";
-import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
+import { SHEET_MENU_ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
   openSheetPopover, characterTokens, noteVanished, readRecovery, writeRecovery } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
@@ -35,7 +35,7 @@ function safeStorage() {
 
 function setupContextMenu() {
   OBR.contextMenu.create({
-    id: `${ID}/sheet`,
+    id: SHEET_MENU_ID,
     icons: [
       {
         // No character yet: the creator opens on its import screen.

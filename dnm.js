@@ -3,8 +3,8 @@
 // Used by both the roller popover and the docked character sheet.
 // =============================================================
 
-export const ID = "com.thuknights.dnm-obr";
-export const CHAR_KEY = `${ID}/char`;
+export const EXT_ID = "com.thuknights.dnm-obr";
+export const CHAR_KEY = `${EXT_ID}/char`;
 
 // -------------------------------------------------------------
 // The docked sheet (1.0, regrid 1.1)
@@ -40,14 +40,22 @@ export const CHAR_KEY = `${ID}/char`;
 // 1.1 gets as close as the API allows: NINE anchor points rather than three sides, and a
 // size free on both axes. Both are the same operation underneath — reopen at these
 // coordinates with this size — which is why adding six more anchors cost almost nothing.
-export const SHEET_POPOVER_ID = `${ID}/sheet-panel`;
+export const SHEET_POPOVER_ID = `${EXT_ID}/sheet-panel`;
+
+// The token context menu item, which background.js registers. Named here rather than
+// written inline there so that every key derived from the namespace is in one file and
+// can be enumerated — mps checks this whole set against its own copy.
+//
+// SHEET_POPOVER_ID above is deliberately NOT this string. Give the popover and the menu
+// item the same id and both break, quietly.
+export const SHEET_MENU_ID = `${EXT_ID}/sheet`;
 
 // Closed on sight alongside the popover whenever the sheet closes itself. A room that
 // was already open when 1.0 deployed still has the old modal on screen, and Owlbear
 // caches the background page for the whole room session — so for one session the thing
 // being closed may well be a modal. Closing an id that is not open is a no-op, and
 // -beta is here because the beta background page used its own id.
-export const SHEET_MODAL_IDS = [`${ID}/sheet-modal`, `${ID}/sheet-modal-beta`];
+export const SHEET_MODAL_IDS = [`${EXT_ID}/sheet-modal`, `${EXT_ID}/sheet-modal-beta`];
 
 // Read as a 3x3 grid, the order the position pad draws them in.
 export const DOCK_ANCHORS = [
@@ -277,7 +285,7 @@ export function resizeEdges(anchor) {
 // gsgrimoire.github.io, and an origin is scheme, host and port, so /dnm-cc/ and /dnm-obr/
 // share one localStorage. That is the same same-origin fact the relay was built on — it
 // was always true, it just could not carry a BroadcastChannel across a storage partition.
-export const DOCK_KEY = `${ID}/dock`;
+export const DOCK_KEY = `${EXT_ID}/dock`;
 
 export function readDock(storage) {
   try {
@@ -301,10 +309,10 @@ export function writeDock(storage, dock) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.4B.F0.1";
+export const EXT_VERSION = "1.4B.F0.2";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
-export const CHANNEL = `${ID}/events`;
+export const CHANNEL = `${EXT_ID}/events`;
 
 // v2 (extension 0.8.0): epochs added. A client running the v1 shape simply has no
 // epochs key; readers must default it rather than assume presence, because room
@@ -1599,7 +1607,13 @@ export async function openSheetPopover(obr, itemId, storage) {
 // this filters at RENDER time against the live scene rather than trying to keep
 // the stored list pruned.
 
-export const RECOVERY_PREFIX = `${ID}/recovery`;
+export const RECOVERY_PREFIX = `${EXT_ID}/recovery`;
+
+// The GM's own store of initiative names that were hidden from the room. Room metadata
+// is readable by every client, so a hidden name is never published there — it is kept
+// per room in the GM's localStorage instead, and roller.js appends the room id. Named
+// here for the same reason as SHEET_MENU_ID: one enumerable set of namespace keys.
+export const HIDDEN_NAMES_PREFIX = `${EXT_ID}/initnames`;
 export const MAX_RECOVERY_ENTRIES = 25;
 export const RECOVERY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // A stored code can be a DM1 one at around 10 kB. Twenty-five of those is 250 kB,

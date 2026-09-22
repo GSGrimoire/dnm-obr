@@ -28,7 +28,7 @@ import {
   EPOCH_LABELS, rollDice, resolveRoll, clamp, applyEvent, parseCode, shutDownAttrs,
   readRecovery, writeRecovery, visibleRecovery, characterTokens,
   readInitiative, initiativeAllActed, MAX_INITIATIVE_ROWS, INITIATIVE_NAME_MAX,
-  ID, mayMarkRow, initRowLabel, initRowIdForCharacter,
+  HIDDEN_NAMES_PREFIX, mayMarkRow, initRowLabel, initRowIdForCharacter,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
 } from "./dnm.js";
@@ -1271,7 +1271,7 @@ async function refreshParty(items) {
 function hiddenNamesKey() {
   let room = "unknown";
   try { room = OBR.room.id; } catch (err) { /* standalone */ }
-  return `${ID}/initnames/${room}`;
+  return `${HIDDEN_NAMES_PREFIX}/${room}`;
 }
 
 function readHiddenNames() {
