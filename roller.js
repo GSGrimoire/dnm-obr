@@ -944,6 +944,13 @@ function partyRow(member, status, initRow, init) {
   // 1.4B: the name IS the link to the sheet, which is what freed the room for the
   // initiative controls. A separate "Sheet" button sat on every row spending space to
   // say a second time what the name already identified.
+  // 1.5: the name and the hidden tag share ONE flex slot. As siblings the tag was an
+  // extra flex item, and on a narrow panel its width was enough to wrap the whole row
+  // onto a second line the moment the GM pressed Hide. Inside the slot the name
+  // ellipsises to make room instead, which is what it already does for a long name.
+  const nameWrap = document.createElement("span");
+  nameWrap.className = "party-name-wrap";
+
   const name = document.createElement(member.itemId ? "button" : "span");
   name.className = "party-name";
   name.textContent = member.name;
@@ -954,7 +961,8 @@ function partyRow(member, status, initRow, init) {
     name.addEventListener("click", () => openSheetFor(member.itemId));
   }
   if (member.kind === "npc") name.classList.add("is-npc");
-  head.append(name);
+  nameWrap.append(name);
+  head.append(nameWrap);
 
   if (member.kind === "npc") {
     // An adversary has no Spirit, no exhaustion and no epochs. The row is its name
@@ -1057,7 +1065,12 @@ function appendHiddenMark(head, initRow) {
   mark.className = "init-hidden-mark";
   mark.textContent = "hidden";
   mark.title = "The table sees this row but not its name.";
-  head.append(mark);
+  // Into the name's slot, not the head. See partyRow: as a sibling this tag was enough
+  // to wrap a narrow row onto two lines. The class widens the slot's floor to cover the
+  // tag, so a panel too narrow for both wraps rather than squeezing the name away.
+  const wrap = head.querySelector(".party-name-wrap");
+  if (wrap) wrap.classList.add("has-hidden-mark");
+  (wrap || head).append(mark);
 }
 
 // Appends the controls only when there ARE any. An empty flex child still occupies a
@@ -1347,11 +1360,13 @@ function addAdversary(name) {
     setStatus("That is as many rows as the tracker holds.");
     return;
   }
-  sendInit("add", {
-    id: "npc:" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    name: clean,
-    kind: "npc",
-  });
+  // 1.5: an adversary joins hidden, so the GM keeps the name the same way toggleHidden
+  // does — locally, and BEFORE the event goes out, because the reducer is what erases it
+  // from the room. Sending the name at all would publish it: the reducer drops it, but
+  // the broadcast itself is readable by every client in the room.
+  const id = "npc:" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  rememberHiddenName(id, clean);
+  sendInit("add", { id, name: "", kind: "npc" });
 }
 
 function toggleHidden(row) {

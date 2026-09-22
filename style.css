@@ -309,10 +309,24 @@ button:disabled { opacity: .25; cursor: not-allowed; }
    sheet's Roll button outside the panel in 2.1; a zero-width flex child does not
    clip, it overlaps. */
 .party-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+/* 1.5: the name and the hidden tag are ONE flex item. The floor that used to sit on
+   .party-name moves here, because this is now the thing the row's wrap calculation
+   sees. The name itself may shrink to nothing inside it — safe only because it keeps
+   overflow:hidden, so it clips rather than spilling over its neighbour, and the layout
+   suite holds a separate floor on the rendered name width. */
+.party-name-wrap {
+  display: flex; align-items: baseline; gap: 6px;
+  flex: 1 1 9ch; min-width: 9ch; overflow: hidden;
+}
+/* The tag is about 40px and the gap 6px, and the name's own floor is 34px. Without
+   this the slot keeps its 9ch floor, the tag takes its share from inside it, and the
+   name is squeezed to about 22px — one line, and unreadable. With it, a panel too
+   narrow for both wraps instead, which is what 260px does and is meant to do. */
+.party-name-wrap.has-hidden-mark { min-width: calc(9ch + 46px); }
 .party-name {
   font-family: var(--font-display); font-size: 13px; font-weight: 700;
   letter-spacing: .04em; color: var(--text-bright);
-  flex: 1 1 9ch; min-width: 9ch;
+  flex: 1 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .party-spirit { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); flex: none; }

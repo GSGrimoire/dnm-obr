@@ -309,7 +309,7 @@ export function writeDock(storage, dock) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.4B.F0.3";
+export const EXT_VERSION = "1.5.F0.4";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${EXT_ID}/events`;
@@ -468,12 +468,22 @@ export function applyInitiativeAction(init, ev) {
       if (rows.length >= MAX_INITIATIVE_ROWS) return current;
       const id = cleanText(ev.id, 40);
       if (!id || indexOf(id) >= 0) return current;
+      const kind = ev.kind === "npc" ? "npc" : "pc";
+      // 1.5: an adversary joins HIDDEN. Putting one in the order used to announce it to
+      // the table, which gave away that a fight was coming and who was in it before the
+      // GM had described anything.
+      //
+      // The name is DROPPED here rather than flagged, exactly as "hide" drops it. Room
+      // metadata is readable by every client, so a name sent there is public whatever
+      // the interface draws. Doing this in the reducer rather than in the sender means a
+      // forged add cannot publish an adversary's name either.
+      const hidden = kind === "npc";
       rows.push({
         id,
-        name: cleanText(ev.name, INITIATIVE_NAME_MAX),
-        kind: ev.kind === "npc" ? "npc" : "pc",
+        name: hidden ? "" : cleanText(ev.name, INITIATIVE_NAME_MAX),
+        kind,
         acted: false,
-        hidden: false,
+        hidden,
       });
       return { ...current, rows };
     }
