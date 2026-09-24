@@ -301,7 +301,7 @@ export function writeDock(storage, dock) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.4B";
+export const EXT_VERSION = "1.4C";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
@@ -460,12 +460,17 @@ export function applyInitiativeAction(init, ev) {
       if (rows.length >= MAX_INITIATIVE_ROWS) return current;
       const id = cleanText(ev.id, 40);
       if (!id || indexOf(id) >= 0) return current;
+      // 1.4C. A row can arrive ALREADY hidden, which is how an adversary is added:
+      // hiding it a moment later would publish its name for that moment. A hidden row
+      // is written without a name whatever the event carried, the same rule "hide"
+      // follows — not writing it is what keeps it secret.
+      const hidden = !!ev.hidden;
       rows.push({
         id,
-        name: cleanText(ev.name, INITIATIVE_NAME_MAX),
+        name: hidden ? "" : cleanText(ev.name, INITIATIVE_NAME_MAX),
         kind: ev.kind === "npc" ? "npc" : "pc",
         acted: false,
-        hidden: false,
+        hidden,
       });
       return { ...current, rows };
     }

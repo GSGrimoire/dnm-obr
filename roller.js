@@ -1347,11 +1347,13 @@ function addAdversary(name) {
     setStatus("That is as many rows as the tracker holds.");
     return;
   }
-  sendInit("add", {
-    id: "npc:" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    name: clean,
-    kind: "npc",
-  });
+  // 1.4C. An adversary goes in HIDDEN. The table meets it as "Hidden" and the GM
+  // reveals it with the row's Show button when the players learn what it is. The name
+  // is remembered locally before the event goes out and never sent at all, so there is
+  // no moment where it sits in room metadata waiting to be hidden.
+  const id = "npc:" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  rememberHiddenName(id, clean);
+  sendInit("add", { id, name: "", kind: "npc", hidden: true });
 }
 
 function toggleHidden(row) {
