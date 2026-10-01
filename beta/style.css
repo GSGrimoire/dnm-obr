@@ -1,0 +1,886 @@
+/* -------------------------------------------------------------
+   Palette lifted from dnm-character-creator.html v1.10 so the panel
+   reads as the same product as the character creator.
+   ------------------------------------------------------------- */
+:root {
+  --teal: #00B4B4;
+  --teal-dim: #007a7a;
+  --teal-glow: rgba(0, 180, 180, 0.25);
+  --teal-faint: rgba(0, 180, 180, 0.08);
+  --bg: #0a0f0f;
+  --bg3: #131e1e;
+  --bg4: #1a2828;
+  --panel: #111a1a;
+  --border: rgba(0, 180, 180, 0.2);
+  --border-bright: rgba(0, 180, 180, 0.6);
+  --text: #d4e8e8;
+  --text-dim: #7aa8a8;
+  --text-bright: #f0ffff;
+  --accent: #ff6b35;
+  --warning: #ffd166;
+  --font-display: 'Rajdhani', sans-serif;
+  --font-body: 'Exo 2', sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  padding: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+#app { display: flex; flex-direction: column; gap: 9px; }
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
+
+input[type="text"], input[type="number"], select {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-bright);
+  padding: 6px 7px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  width: 100%;
+}
+select { font-family: var(--font-display); font-weight: 600; letter-spacing: .04em; }
+input:focus, select:focus { outline: none; border-color: var(--border-bright); box-shadow: 0 0 0 2px var(--teal-faint); }
+
+/* Pools ---------------------------------------------------- */
+.pools { display: flex; gap: 10px; }
+.pool { flex: 1; text-align: center; }
+.pool-label {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--teal);
+  margin-bottom: 3px;
+}
+.pool.threat .pool-label { color: var(--accent); }
+.pool-controls { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.pool-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  min-width: 30px;
+  color: var(--text-bright);
+}
+/* 0.9.7. A run of presses is summed and sent once, so between the last press and the
+   room confirming it this number is the client's expectation rather than the room's
+   answer. Dimmed and underlined while that is true: the value is right, and the panel
+   is not pretending it has been agreed yet. */
+.pool-value.unsettled {
+  opacity: 0.72;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+button {
+  font-family: var(--font-display);
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  padding: 5px 9px;
+  font-size: 13px;
+}
+button:hover:not(:disabled) { border-color: var(--border-bright); color: var(--text-bright); }
+button:disabled { opacity: .25; cursor: not-allowed; }
+
+.step { width: 26px; padding: 4px 0; font-size: 15px; line-height: 1; }
+
+.primary {
+  flex: 1;
+  background: var(--teal-dim);
+  border-color: var(--teal);
+  color: var(--text-bright);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  padding: 9px 20px;
+}
+.primary:hover { background: var(--teal); color: var(--bg); }
+
+.ghost { background: none; border-color: transparent; color: var(--text-dim); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+.ghost:hover { color: var(--accent); border-color: transparent; }
+
+/* Roller --------------------------------------------------- */
+.roller { display: flex; flex-direction: column; gap: 8px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat-row { display: grid; grid-template-columns: 1fr 74px; gap: 8px; }
+
+.rule-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+/* 0.9.10. The Complication clause on its own line. It wrapped to two lines anyway, so
+   the break is put where it reads. */
+.rule-hint-comp { display: block; }
+/* Threat's colour, because a raised Complication range IS extra danger — the same thing
+   Threat measures — and a player who misses the change plays on the wrong odds. */
+.rule-hint-comp.raised { color: var(--accent); }
+
+/* 0.9.10. Warning colour rather than Threat's orange: nothing is wrong with the game,
+   something is missing from the room. */
+.no-gm {
+  background: rgba(255, 209, 102, 0.12);
+  border: 1px solid var(--warning);
+  border-radius: 4px;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 8px 10px;
+}
+
+.segmented { display: flex; gap: 2px; }
+.segmented button { flex: 1; padding: 5px 0; font-family: var(--font-mono); font-size: 12px; }
+.segmented button.on {
+  background: var(--teal-dim);
+  border-color: var(--teal);
+  color: var(--text-bright);
+}
+
+.roll-row { display: flex; align-items: center; gap: 10px; }
+.hidden-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  color: var(--warning);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.hidden-toggle input { accent-color: var(--warning); width: auto; }
+
+/* Log ------------------------------------------------------ */
+.log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.log-header h2 {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .18em;
+  color: var(--teal);
+}
+
+/* 0.9.2: was a flat 220px, which meant a taller panel produced more empty space and
+   the same eight visible entries. Viewport-relative so the log actually uses the
+   height the resize control buys, with a floor for short windows. */
+.log { list-style: none; max-height: clamp(200px, 46vh, 1000px); overflow-y: auto; }
+.log .empty { color: var(--text-dim); font-style: italic; padding: 6px 0; font-size: 12px; }
+
+.entry { border-top: 1px solid var(--border); padding: 7px 0; }
+.entry:first-child { border-top: none; }
+/* 0.9.2: tinted as well as rule-marked, so a hidden roll is separable from a public
+   one while scanning the log rather than only on reading the entry. */
+.entry.is-hidden { border-left: 2px solid var(--warning); padding-left: 7px;
+  background: rgba(255, 209, 102, 0.04); }
+
+.entry-head { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; }
+.entry-head strong {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--text-bright);
+}
+.entry-label { color: var(--text-dim); font-size: 11px; font-style: italic; }
+.entry-test { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+
+.dice { display: flex; gap: 4px; margin: 5px 0; flex-wrap: wrap; }
+.die {
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.die.success { background: var(--teal-dim); border-color: var(--teal); color: var(--text-bright); }
+/* 1.2. The same yellow the character sheet paints a critical, not teal. A crit is the
+   rarest and best thing a roll can do, and it read as just another success here while it
+   glowed on the sheet — the same die in two colours depending on where you looked. Both
+   halves already defined --warning as #ffd166; only this rule disagreed. */
+.die.crit {
+  background: var(--warning); border-color: var(--warning); color: var(--bg);
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(255,209,102,0.5);
+}
+.die.complication { background: rgba(255,107,53,.15); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
+/* v0.8.0: GM table controls. Visually separated from the roll controls above it,
+   because pressing one of these affects every character at the table rather than
+   just this window. */
+.gm-panel {
+  border: 1px solid var(--teal-dim);
+  background: rgba(0, 122, 122, 0.06);
+  padding: 9px 10px;
+  margin-bottom: 10px;
+}
+/* 1.3: gap and an auto margin rather than space-between, because the Party head
+   gained a third child and space-between would have spread the badge away from the
+   button it belongs beside. */
+.gm-panel-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+}
+.gm-panel-head h2 { margin: 0; font-size: 12px; letter-spacing: 0.06em; margin-right: auto; }
+.gm-badge {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.12em;
+  color: var(--teal); border: 1px solid var(--teal-dim); padding: 1px 5px;
+}
+.gm-group { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.gm-group-label {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em;
+  /* 0.9.5B: was 56px, which wrapped "Complication Level" mid-word and pushed the
+     number buttons out of line with the rows above and below it. Sized to the
+     longest label rather than the shortest, and given a line-height so a two-line
+     label still sits level with its buttons. */
+  text-transform: uppercase; color: var(--text-dim); width: 74px; flex: none;
+  line-height: 1.25;
+}
+.gm-buttons { display: flex; flex-wrap: wrap; gap: 5px; }
+.gm-btn {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em;
+  padding: 4px 8px; cursor: pointer;
+  background: transparent; color: var(--text); border: 1px solid var(--border);
+}
+.gm-btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
+.gm-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Armed state for the two-step confirm. Deliberately loud: an armed button is one
+   click from affecting every character at the table. */
+.gm-btn.armed {
+  border-color: var(--accent); color: var(--accent);
+  background: rgba(255, 107, 53, 0.12);
+}
+.gm-note {
+  font-family: var(--font-mono); font-size: 9px; line-height: 1.5;
+  color: var(--text-dim); margin: 6px 0 0;
+}
+
+/* v0.9.0: party panel. Same framing as the table controls above it — this is GM
+   furniture, not something a player is meant to be looking at — but it is read
+   rather than pressed, so the rows are quiet and the status is the only colour. */
+.party-panel {
+  border: 1px solid var(--teal-dim);
+  background: rgba(0, 122, 122, 0.06);
+  padding: 9px 10px;
+  margin-bottom: 10px;
+}
+.party-list { list-style: none; max-height: clamp(150px, 24vh, 560px); overflow-y: auto; }
+.party-row { border-top: 1px solid var(--border); padding: 6px 0; }
+.party-row:first-child { border-top: none; }
+/* 1.3: wraps, and the name has a floor. The row was three children and is now up
+   to six, and .party-name is the only one that gives way — with overflow:hidden its
+   automatic minimum size is 0, so without a floor it collapses to nothing and its
+   neighbours spill over where it used to be. That is the same fault that put the
+   sheet's Roll button outside the panel in 2.1; a zero-width flex child does not
+   clip, it overlaps. */
+.party-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.party-name {
+  font-family: var(--font-display); font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text-bright);
+  flex: 1 1 9ch; min-width: 9ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.party-spirit { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); flex: none; }
+/* 1.3. Exhaustion initials and the injury count. Both warning yellow, the same
+   --warning the sheet uses for a critical, because both mean the same thing at a
+   glance: look here before you decide what happens next. */
+.party-exhaustion { display: inline-flex; gap: 3px; flex: none; }
+.party-mark {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 3px;
+  border: 1px solid var(--warning);
+  border-radius: 2px;
+  color: var(--warning);
+  cursor: help;
+}
+.party-injuries {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--warning);
+  flex: none;
+  cursor: help;
+}
+
+.party-status {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
+  text-transform: uppercase; padding: 1px 5px; border: 1px solid; flex: none;
+}
+.party-status.is-current { color: var(--teal); border-color: var(--teal-dim); }
+.party-status.is-behind { color: var(--accent); border-color: var(--accent); background: rgba(255,107,53,.12); }
+.party-status.is-unsynced { color: var(--text-dim); border-color: var(--border); }
+.party-detail { font-family: var(--font-mono); font-size: 9px; color: var(--accent); margin-top: 3px; }
+.party-empty { color: var(--text-dim); font-style: italic; padding: 6px 0; font-size: 12px; }
+
+.entry-sum { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+.entry-sum.pass { color: var(--teal); }
+.entry-sum.fail { color: var(--accent); }
+
+/* v1.17: action entries. Marked down the left edge so a GM scanning the feed can tell
+   at a glance which lines are dice and which are somebody spending from a pool. The
+   label is not italic here, unlike a roll's optional label, because on an action it
+   carries the actual content — the ability or item name. */
+.entry.entry-action { border-left: 2px solid var(--teal-dim); padding-left: 7px; }
+.entry.entry-action .entry-label { font-style: normal; color: var(--text); }
+.entry-sum.pool-momentum { color: var(--teal); }
+.entry-sum.pool-threat { color: var(--accent); }
+
+.status { font-size: 10px; color: var(--warning); min-height: 13px; text-align: center; font-family: var(--font-mono); }
+
+/* Selected-character banner --------------------------------- */
+.char-banner {
+  font-family: var(--font-mono); font-size: 10px;
+  background: var(--teal-faint); border: 1px solid var(--teal-dim);
+  border-radius: 3px; padding: 5px 7px; color: var(--teal);
+  display: flex; justify-content: space-between; gap: 8px;
+}
+.char-banner .warn { color: var(--accent); }
+input[readonly] { opacity: .7; cursor: not-allowed; }
+
+/* ============================================================
+   SCROLLBARS (0.9.2)
+   ------------------------------------------------------------
+   The panel inherits the browser's default scrollbars, which on Windows are a
+   light grey slab against a near-black panel and are the most obviously
+   un-themed thing in the extension. Styled with both the standard properties
+   and the WebKit pseudo-elements: Firefox reads the former, Chromium and the
+   Owlbear desktop build read the latter, and neither alone covers the table.
+   ============================================================ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--teal-dim) var(--bg);
+}
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track {
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+}
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--teal-dim), #05494a);
+  border: 1px solid var(--border-bright);
+  border-radius: 0;              /* squared off, matching the panel chrome */
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--teal);
+  box-shadow: 0 0 8px var(--teal-glow);
+}
+*::-webkit-scrollbar-corner { background: var(--bg); }
+
+/* ============================================================
+   PANEL RESIZER (0.9.3)
+   ------------------------------------------------------------
+   Owlbear sizes the popover from the manifest and gives the viewer no edge to
+   grab. This strip is the substitute bottom edge: sticky to the foot of the
+   page so it is always reachable, whatever the log is doing above it.
+
+   0.9.2 shipped +/- buttons in the log header instead. Nobody found them, and
+   they were not resizing in the sense anyone means it. They remain here beside
+   the grip because a drag is not keyboard reachable.
+   ============================================================ */
+.resizer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 5px 8px;
+  margin-top: 6px;
+  background: var(--bg4);
+  border-top: 1px solid var(--border);
+  cursor: ns-resize;
+  touch-action: none;          /* the drag is ours, not the browser's scroll */
+  user-select: none;
+}
+
+.resizer:hover { border-top-color: var(--border-bright); }
+.resizer.is-dragging { background: var(--teal-faint); border-top-color: var(--teal); }
+
+/* Three short bars: the conventional "this is draggable" mark. */
+.resizer-grip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 22px;
+  cursor: ns-resize;
+}
+
+.resizer-grip span {
+  display: block;
+  width: 34px;
+  height: 1px;
+  background: var(--teal-dim);
+}
+
+.resizer:hover .resizer-grip span,
+.resizer.is-dragging .resizer-grip span { background: var(--teal); }
+
+.height-value {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  min-width: 28px;
+  text-align: center;
+}
+
+.icon-btn {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 2px 7px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.icon-btn:disabled { opacity: 0.35; cursor: default; box-shadow: none; }
+
+/* ============================================================
+   HIDDEN ROLL BADGE (0.9.2)
+   ------------------------------------------------------------
+   Warning-coloured and boxed, deliberately unlike every other tag in the log.
+   The previous treatment appended "(hidden)" to the character name in the same
+   weight and colour, which read as part of the name. Whether a roll reached
+   the table is the one thing about it that must not be missable.
+   ============================================================ */
+.entry-hidden-tag {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  margin-left: 6px;
+  white-space: nowrap;
+  border: 1px solid;
+}
+
+/* Two colours because they mean two different things, and reading one as the other
+   is a real misunderstanding at the table: HIDDEN told the others you rolled,
+   SECRET told them nothing. Warning amber for the first, accent orange for the
+   second, which is the stronger signal in this palette. */
+.entry-hidden-tag.is-hidden {
+  color: var(--warning);
+  border-color: rgba(255, 209, 102, 0.5);
+  background: rgba(255, 209, 102, 0.1);
+}
+
+.entry-hidden-tag.is-secret {
+  color: var(--accent);
+  border-color: rgba(255, 107, 53, 0.55);
+  background: rgba(255, 107, 53, 0.12);
+}
+
+/* The mode picker under the Roll button. */
+.conceal { display: flex; align-items: center; }
+.conceal-hint {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  margin: 6px 0 0;
+  min-height: 1em;
+}
+
+
+/* ============================================================
+   COMPLICATION RANGE + MOMENTUM CLAIM (0.9.5)
+   ============================================================ */
+
+/* Threat-coloured, because lowering the Complication range raises the danger, which
+   is the thing Threat measures. Distinct from the boundary buttons beside them so a
+   press meant for End Scene is not aimed here by mistake. */
+.gm-btn.danger {
+  color: var(--accent);
+  border-color: rgba(255, 107, 53, 0.45);
+  background: rgba(255, 107, 53, 0.08);
+  min-width: 38px;
+}
+
+.gm-btn.danger:hover:not(:disabled) {
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(255, 107, 53, 0.35);
+}
+
+/* The chosen threshold. Filled rather than outlined, so the current setting reads at
+   a glance from across the panel. */
+.gm-btn.danger.on {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.claim-momentum {
+  display: inline-block;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  color: var(--teal);
+  border: 1px solid var(--teal-dim);
+  background: var(--teal-faint);
+  cursor: pointer;
+}
+
+.claim-momentum:hover:not(:disabled) {
+  border-color: var(--teal);
+  color: var(--text-bright);
+  box-shadow: 0 0 10px var(--teal-glow);
+}
+
+/* Greyed once taken, and greyed for anyone it does not belong to. Both are "you
+   cannot press this", so they look the same. */
+.claim-momentum:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+  border-style: dashed;
+}
+
+/* -------------------------------------------------------------
+   Lost characters and backups (1.3)
+   ------------------------------------------------------------- */
+.recovery, .backup {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.recovery-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.recovery-head h3 {
+  margin: 0; font-family: var(--font-display); font-size: 11px;
+  letter-spacing: 0.06em; color: var(--warning); font-weight: 700;
+}
+.recovery-count {
+  font-family: var(--font-mono); font-size: 9px; color: var(--warning);
+  border: 1px solid var(--warning); border-radius: 2px; padding: 0 4px;
+}
+.recovery-list { list-style: none; max-height: clamp(120px, 20vh, 400px); overflow-y: auto; }
+.recovery-row { border-top: 1px solid var(--border); padding: 6px 0; }
+.recovery-row:first-child { border-top: none; }
+.recovery-head-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.recovery-name {
+  font-family: var(--font-display); font-size: 12px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text-bright);
+  /* Same floor the party row needs, and for the same reason: with overflow
+     hidden its automatic minimum size is 0, so it would collapse rather than
+     ellipsise and let the timestamp sit on top of it. */
+  flex: 1 1 9ch; min-width: 9ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.recovery-when { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); flex: none; }
+.recovery-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.recovery-actions .ghost { padding: 2px 4px; }
+.recovery-forget { margin-left: auto; }
+
+.backup-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.backup-summary {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);
+  margin-right: auto;
+}
+.backup-text {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 6px;
+  resize: vertical;
+}
+
+/* -------------------------------------------------------------
+   Initiative (1.4, folded into the party panel in 1.4B)
+   -------------------------------------------------------------
+   There is no initiative panel any more — these style the initiative half of a
+   party row, and the round controls in the party header. */
+.init-round {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em;
+  color: var(--teal); border: 1px solid var(--teal-dim); padding: 1px 5px;
+  flex: none;
+}
+.init-next { font-size: 10px; padding: 2px 6px; flex: none; }
+/* Lit when everyone has acted. It never fires on its own — a round that ended itself
+   while someone was still deciding would be worse than no tracker — so this is an
+   invitation, not a state. */
+.gm-btn.ready {
+  border-color: var(--teal); color: var(--bg); background: var(--teal);
+  box-shadow: 0 0 8px var(--teal-glow);
+}
+/* Done. Dimmed rather than struck through or reordered: the row has to stay where it
+   is so the order still reads, and legible so the GM can undo it. */
+.party-row.is-acted .party-name { color: var(--text-dim); opacity: .55; }
+.party-row.is-acted .party-spirit,
+.party-row.is-acted .party-exhaustion,
+.party-row.is-acted .party-injuries { opacity: .55; }
+.init-moves { display: inline-flex; flex-direction: column; gap: 1px; flex: none; }
+.init-move { font-size: 8px; line-height: 1; padding: 1px 3px; letter-spacing: 0; }
+.init-move:disabled { opacity: .25; cursor: default; }
+.init-move:disabled:hover { color: var(--text-dim); }
+.init-hidden-mark {
+  font-family: var(--font-mono); font-size: 9px; color: var(--warning);
+  border: 1px solid var(--warning); border-radius: 2px; padding: 0 3px;
+  flex: none; cursor: help;
+}
+.party-row-actions { display: flex; gap: 3px; flex: none; margin-left: auto; }
+.party-row-actions .ghost { padding: 2px 4px; }
+.init-drop { color: var(--accent); }
+.init-add { margin-top: 6px; }
+.init-add-input {
+  width: 100%;
+  background: var(--bg); color: var(--text);
+  border: 1px dashed var(--border); padding: 5px 6px;
+  font-family: var(--font-body); font-size: 12px;
+}
+.init-add-input:focus { border-style: solid; border-color: var(--border-bright); outline: none; }
+
+/* 1.4B: the name is the link to the sheet now, which is what freed the room on the
+   row for the initiative controls. Styled as the name it already was — a button
+   that looks like a button would just be the old Sheet button wearing a new label. */
+.party-name.is-link {
+  background: none; border: none; padding: 0; margin: 0;
+  text-align: left; cursor: pointer; font: inherit;
+  font-family: var(--font-display); font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; color: var(--text-bright);
+}
+.party-name.is-link:hover { color: var(--teal); text-decoration: underline; }
+.party-name.is-npc { color: var(--accent); }
+
+/* The GM's switch for whether the table can see the party panel. */
+.party-share.is-on { color: var(--teal); }
+
+/* -------------------------------------------------------------
+   GM Tools (1.5)
+   -------------------------------------------------------------
+   The same framing as Table Controls — GM furniture — with sections that fold, because
+   the whole of Chapter 4 does not fit open at once beside a roller. Gains are drawn in
+   teal and spends in Threat's orange, so the two halves read apart at a glance. */
+.gm-tools { padding: 9px 10px; }
+.gm-tools.is-popped .gm-panel-head { margin-bottom: 0; }
+.gmt-head { flex-wrap: wrap; }
+.gmt-threat { display: inline-flex; align-items: baseline; gap: 5px; }
+.gmt-threat-label { font-family: var(--font-mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+.gmt-threat-value { font-family: var(--font-mono); font-size: 16px; color: var(--text-bright); }
+
+.gm-sec { border-top: 1px solid var(--border); padding: 4px 0; }
+.gm-sec-head {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  font-family: var(--font-display); font-size: 11px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--teal); padding: 3px 0;
+}
+.gm-sec-head::-webkit-details-marker { display: none; }
+.gm-sec-head::before { content: "\25B8"; font-size: 9px; color: var(--text-dim); }
+.gm-sec[open] > .gm-sec-head::before { content: "\25BE"; }
+.gm-sec-body { padding: 4px 0 6px; display: flex; flex-direction: column; gap: 6px; }
+
+.gm-info {
+  font-family: var(--font-mono); font-size: 9px; line-height: 1; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 50%; width: 14px; height: 14px;
+  display: inline-grid; place-items: center; cursor: help;
+}
+
+/* The grid of rule buttons. Each cell is a button plus whatever it needs (a stepper, a
+   cost readout), and wraps rather than squeezing: a zero-width flex child spills over its
+   neighbours, which is the fault layout.test.mjs watches for. */
+.gmt-grid { display: flex; flex-direction: column; gap: 4px; }
+.gmt-cell, .gmt-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gmt-wrap { flex-wrap: wrap; }
+.gmt-cell .gm-btn { flex: 0 1 auto; text-align: left; }
+.gm-btn.gmt-gain { color: var(--teal); border-color: var(--teal-dim); }
+.gm-btn.gmt-spend { color: var(--accent); border-color: rgba(255, 107, 53, 0.45); }
+.gm-btn.gmt-wide { width: 100%; text-align: left; white-space: normal; }
+.gm-btn.armed { border-color: var(--accent); color: var(--accent); background: rgba(255, 107, 53, 0.12); }
+.gmt-cost { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+.gmt-mini { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; }
+.gmt-subhead {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-dim); margin-top: 6px; cursor: help;
+}
+.gmt-actions { display: flex; flex-direction: column; gap: 4px; }
+
+.gm-stepper { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.gm-stepper-val { font-family: var(--font-mono); font-size: 12px; min-width: 18px; text-align: center; color: var(--text-bright); }
+.gm-step { font-size: 12px; padding: 1px 6px; letter-spacing: 0; }
+
+.gmt-check {
+  flex-direction: row; align-items: center; gap: 4px; text-transform: none;
+  letter-spacing: 0; font-family: var(--font-body); font-size: 11px; color: var(--text);
+  font-weight: 500; cursor: pointer;
+}
+.gmt-check input { width: auto; accent-color: var(--teal); }
+
+.gmt-banners:empty { display: none; }
+.gmt-banner {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  font-size: 11px; padding: 6px 8px; border-radius: 3px; margin: 4px 0;
+}
+.gmt-banner.is-rushed { color: var(--warning); border: 1px solid var(--warning); background: rgba(255, 209, 102, 0.1); }
+.rushed-badge {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--warning); border: 1px solid var(--warning); padding: 1px 5px; cursor: help;
+}
+
+/* Tickers */
+.gmt-ticker { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.gmt-ticker.is-off { opacity: .55; }
+.gmt-ticker input[type="checkbox"] { width: auto; accent-color: var(--teal); }
+.gmt-ticker-name { flex: 1 1 10ch; min-width: 10ch; padding: 3px 5px; font-size: 12px; }
+.gmt-eye.is-on, .gmt-pin.is-on { color: var(--teal); }
+.gmt-preset { flex: 1 1 12ch; min-width: 12ch; padding: 4px 5px; font-size: 12px; }
+.gmt-total { font-family: var(--font-mono); font-size: 10px; color: var(--accent); margin-right: auto; }
+
+/* Hazard builder */
+.gmt-hazard { display: flex; flex-direction: column; gap: 6px; }
+.gmt-hazard-name { padding: 4px 6px; font-size: 12px; }
+.gmt-hazard-result { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.gmt-avoid button, .gmt-stakes button { font-family: var(--font-display); font-size: 11px; padding: 4px 2px; }
+
+/* NPCs */
+.gmt-filter { flex: 1 1 10ch; min-width: 10ch; padding: 4px 6px; font-size: 12px; }
+.gmt-npc-wrap { border-top: 1px solid var(--border); padding: 5px 0; }
+.gmt-npc { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gmt-npc-name, .gmt-fighter-name {
+  background: none; border: none; padding: 0; text-align: left; cursor: pointer;
+  font-family: var(--font-display); font-size: 13px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent); flex: 1 1 9ch; min-width: 9ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gmt-npc-name:hover, .gmt-fighter-name:hover { text-decoration: underline; color: var(--text-bright); }
+.gmt-npc-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.gmt-npc-actions .ghost { padding: 2px 4px; }
+.gmt-tag {
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 2px; padding: 0 4px; flex: none;
+}
+.gmt-tag.is-threat { color: var(--accent); border-color: rgba(255, 107, 53, 0.45); }
+.gmt-tag.is-sample { color: var(--warning); border-color: rgba(255, 209, 102, 0.5); }
+.gmt-sample-note { color: var(--warning); }
+.gmt-fighter { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 4px 0; border-top: 1px solid var(--border); }
+.gmt-fighter.is-hidden .gmt-fighter-name { opacity: .8; }
+.gmt-fighter .gm-btn { padding: 2px 6px; }
+.gmt-pt { font-family: var(--font-mono); font-size: 10px; color: var(--warning); cursor: help; }
+
+.gmt-statblock {
+  border-left: 2px solid var(--accent); padding: 4px 0 4px 8px; margin: 2px 0 6px;
+  font-size: 11px; line-height: 1.45; display: flex; flex-direction: column; gap: 2px;
+}
+.gmt-sb-line { font-family: var(--font-mono); font-size: 10px; color: var(--text-bright); }
+.gmt-sb-facts { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+.gmt-sb-item b { color: var(--text-bright); font-weight: 600; }
+.gmt-sb-notes { font-style: italic; color: var(--text-dim); }
+.gmt-sb-source { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); }
+
+.gmt-editor { display: flex; flex-direction: column; gap: 6px; }
+.gmt-field { flex: 1 1 8ch; min-width: 8ch; }
+.gmt-field input, .gmt-field textarea { padding: 4px 6px; font-size: 12px; }
+.gmt-editor .gmt-row .gmt-field { flex: 1 1 7ch; }
+
+.gmt-log { max-height: clamp(120px, 26vh, 420px); }
+.gmt-ref-item summary { cursor: pointer; font-size: 12px; color: var(--text); padding: 2px 0; }
+.gmt-ref-quote { font-size: 11px; line-height: 1.5; color: var(--text); margin: 3px 0; font-style: italic; }
+.gmt-tip-cite { font-family: var(--font-mono); font-size: 9px; color: var(--teal); }
+
+/* The one floating tooltip. Fixed, so it can leave the section it belongs to, and
+   clamped to the viewport in showTip(). */
+.gm-tip {
+  position: fixed; z-index: 200; pointer-events: none;
+  background: var(--bg4); border: 1px solid var(--border-bright); border-radius: 4px;
+  padding: 8px 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .55);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.gm-tip[hidden] { display: none; }
+.gm-tip-title { font-family: var(--font-display); font-size: 12px; font-weight: 700; color: var(--text-bright); letter-spacing: .04em; }
+.gm-tip-quote { font-size: 11px; line-height: 1.5; color: var(--text); font-style: italic; }
+.gm-tip-cite { font-family: var(--font-mono); font-size: 9px; color: var(--teal); letter-spacing: .08em; }
+.gm-tip-note { font-size: 11px; line-height: 1.45; color: var(--warning); }
+
+/* The GM's private log lines in the roller's feed. */
+.entry.is-gm { border-left-color: var(--warning); background: rgba(255, 209, 102, 0.035); }
+.entry-hidden-tag.is-gm { color: var(--warning); border-color: rgba(255, 209, 102, 0.5); background: rgba(255, 209, 102, 0.08); }
+
+/* Rolling for an NPC: the Truth / Default choice in the banner. */
+.npc-mode { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.npc-mode-btn { padding: 1px 5px; font-size: 9px; text-transform: none; letter-spacing: 0; color: var(--text-dim); border: 1px solid var(--border); }
+.npc-mode-btn.on { color: var(--bg); background: var(--teal); border-color: var(--teal); }
+.char-banner { flex-wrap: wrap; }
+
+/* The popped-out page: the dock bar, and the sheet's pad, zoom and resize handles. These
+   mirror the creator's .obr-* rules so the two docked panels look like one product. */
+.gm-popover-page { padding: 0; }
+.gm-popover-page #app { padding: 0 10px 10px; }
+.gm-bar {
+  position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; margin-bottom: 8px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.gm-close { margin-left: auto; }
+.obr-dock { display: flex; align-items: center; gap: 8px; }
+.obr-pad {
+  display: grid; grid-template-columns: repeat(3, 10px); grid-template-rows: repeat(3, 8px);
+  gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 3px; flex: none;
+}
+.obr-pad-cell { padding: 0; border: none; border-radius: 1px; background: var(--border); cursor: pointer; }
+.obr-pad-cell:hover:not(:disabled) { background: var(--teal); }
+.obr-pad-cell[aria-pressed="true"] { background: var(--teal); cursor: default; opacity: 1; }
+.obr-zoomgroup { display: flex; align-items: stretch; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; flex: none; }
+.obr-zoom-readout {
+  display: flex; align-items: center; padding: 0 6px; font-family: var(--font-mono);
+  font-size: 10px; color: var(--text-dim); min-width: 42px; justify-content: center;
+}
+.obr-dock-btn { font-size: 10px; padding: 4px 8px; border: none; border-radius: 0; background: transparent; color: var(--text-dim); }
+.obr-dock-btn:hover { background: var(--teal-dim); color: var(--text-bright); }
+.obr-resize { position: fixed; z-index: 90; touch-action: none; }
+.obr-resize-w { top: 0; bottom: 0; left: 0; width: 7px; cursor: ew-resize; }
+.obr-resize-e { top: 0; bottom: 0; right: 0; width: 7px; cursor: ew-resize; }
+.obr-resize-n { left: 0; right: 0; top: 0; height: 7px; cursor: ns-resize; }
+.obr-resize-s { left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
+.obr-resize-nw, .obr-resize-ne, .obr-resize-sw, .obr-resize-se { width: 14px; height: 14px; z-index: 91; }
+.obr-resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.obr-resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.obr-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.obr-resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
+body.obr-resizing { user-select: none; }
+body.obr-resizing .obr-resize { background: var(--teal-dim); }
+
+/* 1.5. Next Round now carries the round's Threat ("Next Round (+3)"), which pushed the
+   party header's last button past a 420px panel. The header wraps instead. */
+.gm-panel-head { flex-wrap: wrap; }
+
+/* 1.5. A display rule beats the UA's [hidden], so the empty character banner was drawn
+   as a bare teal bar above the roller whenever nothing was selected — since the banner
+   was introduced. Found while screenshotting the GM tools. */
+.char-banner[hidden] { display: none; }

@@ -1,0 +1,1871 @@
+// =============================================================
+// Shared Dreams & Machines helpers
+// Used by both the roller popover and the docked character sheet.
+// =============================================================
+
+export const ID = "com.thuknights.dnm-obr-beta";
+export const CHAR_KEY = `${ID}/char`;
+// 1.5. An adversary attached to a token. Holds an OPAQUE roster id and nothing else —
+// see npcTokenRef() in gmrules.js for why the name and the stats never go on the token.
+export const NPC_KEY = `${ID}/npc`;
+
+// -------------------------------------------------------------
+// The docked sheet (1.0, regrid 1.1)
+// -------------------------------------------------------------
+// The sheet used to open as OBR.modal, which is centred, fixed and backdropped: to see
+// the map or the log you had to close it, and to roll again you had to reopen it. That
+// is the whole evening, and it is what 1.0 was for.
+//
+// 0.9.9 tried to solve it with a separate browser window and a BroadcastChannel courier.
+// It never once connected, and the likeliest reason is Chrome partitioning storage by
+// top-level site: the extension is a third-party frame under owlbear.rodeo and a
+// window.open()ed sheet is first-party on gsgrimoire.github.io, so their channels sit in
+// different partitions. The whole relay is gone as of 1.0. Do not rebuild it.
+//
+// A popover is the route that works, and it is better than the window ever would have
+// been: a popover is still FRAMED BY OWLBEAR, so the sheet keeps a working SDK and needs
+// no courier at all.
+//
+// WHAT THE API ACTUALLY ALLOWS, checked against every one of the twelve APIs in SDK
+// 3.1.0, which is the current release:
+//
+//   PopoverApi  open, close, getWidth, setWidth, getHeight, setHeight
+//   ModalApi    open, close. No geometry at all.
+//   ActionApi   the right-hand drawer. Size only; Owlbear owns the position.
+//
+// There is no setPosition anywhere, and anchorPosition is read once at open. So SIZE is
+// live and free, and POSITION costs a close and a reopen, which reloads the sheet.
+//
+// Roll20 can drag its sheet because Roll20 IS the page; its sheet is a div it owns. Ours
+// is a separate site in an iframe Owlbear places. We control everything inside the frame
+// and nothing about where it sits. That is a structural limit, not an effort one.
+//
+// 1.1 gets as close as the API allows: NINE anchor points rather than three sides, and a
+// size free on both axes. Both are the same operation underneath — reopen at these
+// coordinates with this size — which is why adding six more anchors cost almost nothing.
+export const SHEET_POPOVER_ID = `${ID}/sheet-panel`;
+
+// Closed on sight alongside the popover whenever the sheet closes itself. A room that
+// was already open when 1.0 deployed still has the old modal on screen, and Owlbear
+// caches the background page for the whole room session — so for one session the thing
+// being closed may well be a modal. Closing an id that is not open is a no-op, and
+// -beta is here because the beta background page used its own id.
+export const SHEET_MODAL_IDS = [`${ID}/sheet-modal`, `${ID}/sheet-modal-beta`];
+
+// Read as a 3x3 grid, the order the position pad draws them in.
+export const DOCK_ANCHORS = [
+  "top-left", "top", "top-right",
+  "left", "center", "right",
+  "bottom-left", "bottom", "bottom-right",
+];
+
+// 1.0 shipped three sides, and each implied a size the stored object did not hold: a
+// side dock was full height whatever its stored height, and the bottom dock was full
+// width whatever its stored width. Carrying the anchor across without the fill would
+// silently shrink a bottom dock from the whole width to 560px on the update, so the
+// axis each side used to fill is restored here. 4000 is past any real viewport and
+// clamps down to it at render.
+const LEGACY_SIDES = {
+  right: { anchor: "right", fill: "height" },
+  left: { anchor: "left", fill: "height" },
+  bottom: { anchor: "bottom", fill: "width" },
+};
+
+// Height defaults past any real viewport so a fresh dock fills the screen vertically,
+// which is what the right-hand dock did in 1.0. Dragging the edge brings it down.
+export const DOCK_LIMITS = { width: [320, 4000], height: [220, 4000], zoom: [0.6, 1.6] };
+
+// 1.2. A SIZE PER ANCHOR, not one size shared by all nine.
+//
+// From play: a sheet along the bottom wants to be broad and short, and the same sheet at
+// a side wants to be narrow and tall. With one shared pair you re-dragged it every time
+// you moved it, which made moving it something you did not do.
+//
+// So the defaults follow the shape of the anchor rather than being one number:
+//
+//   left, right, centre     narrow and full height  — the long document, beside the map
+//   top, bottom             full width and short    — a strip under or over it
+//   the four corners        a box, neither filling
+//
+// 4000 is past any real viewport and clamps down to it, which is how "fill this axis" is
+// expressed without storing a number that goes stale when the window resizes.
+const FILL = 4000;
+export const ANCHOR_DEFAULT_SIZE = {
+  "top-left": { width: 560, height: 420 },
+  "top": { width: FILL, height: 420 },
+  "top-right": { width: 560, height: 420 },
+  "left": { width: 560, height: FILL },
+  "center": { width: 560, height: FILL },
+  "right": { width: 560, height: FILL },
+  "bottom-left": { width: 560, height: 420 },
+  "bottom": { width: FILL, height: 420 },
+  "bottom-right": { width: 560, height: 420 },
+};
+
+export const DOCK_DEFAULT = { anchor: "right", zoom: 1 };
+
+// The one invariant: some map is always reachable. The panel may fill EITHER axis but
+// never both, so a sheet can be full height beside the map (1.0's right dock) or full
+// width below it (1.0's bottom dock), and never covers the table completely.
+export const DOCK_MAX_FILL = 0.75;
+
+// The viewport is asked for at open time and can fail or read zero before the scene is
+// up. Falling back to a plausible desktop is better than a popover positioned at 0,0.
+export const DOCK_FALLBACK_VIEWPORT = { width: 1600, height: 900 };
+
+const clampTo = ([lo, hi], n, fallback) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.round(v)));
+};
+
+const clampZoom = (n) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return DOCK_DEFAULT.zoom;
+  // One decimal: the control steps by 0.1 and a stored 0.7000000000000001 would render
+  // as that in any readout built from it.
+  return Math.round(Math.max(DOCK_LIMITS.zoom[0], Math.min(DOCK_LIMITS.zoom[1], v)) * 10) / 10;
+};
+
+// Anything reaching this has been through localStorage, which any page on the origin
+// can write and a user can edit by hand. Clamp on the way OUT, the same rule the
+// character code follows.
+//
+// Every anchor gets an entry, so nothing downstream has to cope with a missing one.
+export function clampDock(dock) {
+  const d = dock && typeof dock === "object" ? dock : {};
+
+  // A 1.0 dock has `side` and no `anchor`. Each old side implied a size the stored object
+  // never held — a side dock was full height, the bottom dock full width — so the axis it
+  // filled is restored rather than dropped.
+  const legacy = d.anchor == null && typeof d.side === "string" ? LEGACY_SIDES[d.side] : null;
+  const raw = legacy ? legacy.anchor : d.anchor;
+  const anchor = DOCK_ANCHORS.includes(raw) ? raw : DOCK_DEFAULT.anchor;
+
+  const stored = d.sizes && typeof d.sizes === "object" ? d.sizes : {};
+  // 1.1 stored ONE width and height at the top level. They belong to whichever anchor was
+  // in use, so they seed that anchor and leave the other eight at their defaults —
+  // otherwise moving the sheet after the update would throw away the size just carried
+  // across. A 1.2 dock has `sizes` and its entries win.
+  const flatW = d.width, flatH = d.height;
+  const hasFlat = flatW != null || flatH != null || legacy;
+
+  const sizes = {};
+  for (const a of DOCK_ANCHORS) {
+    const fallback = ANCHOR_DEFAULT_SIZE[a];
+    const from = stored[a] && typeof stored[a] === "object" ? stored[a]
+      : (hasFlat && a === anchor ? {
+          width: legacy && legacy.fill === "width" ? FILL : flatW,
+          height: legacy && legacy.fill === "height" ? FILL : flatH,
+        } : {});
+    sizes[a] = {
+      width: clampTo(DOCK_LIMITS.width, from.width, fallback.width),
+      height: clampTo(DOCK_LIMITS.height, from.height, fallback.height),
+    };
+  }
+
+  return { anchor, zoom: clampZoom(d.zoom), sizes };
+}
+
+// The stored size for one anchor, before the viewport has a say.
+export function dockSizeFor(dock, anchor) {
+  const d = clampDock(dock);
+  return d.sizes[DOCK_ANCHORS.includes(anchor) ? anchor : d.anchor];
+}
+
+// Returns a dock with one anchor's size replaced. The resize drag writes through this so
+// it can never touch another anchor's setup.
+export function withDockSize(dock, anchor, size) {
+  const d = clampDock(dock);
+  const a = DOCK_ANCHORS.includes(anchor) ? anchor : d.anchor;
+  return clampDock({ ...d, sizes: { ...d.sizes, [a]: { ...d.sizes[a], ...size } } });
+}
+
+function fitViewport(viewport) {
+  const w = Number(viewport && viewport.width);
+  const h = Number(viewport && viewport.height);
+  return {
+    width: Number.isFinite(w) && w > 0 ? Math.round(w) : DOCK_FALLBACK_VIEWPORT.width,
+    height: Number.isFinite(h) && h > 0 ? Math.round(h) : DOCK_FALLBACK_VIEWPORT.height,
+  };
+}
+
+// The panel's size in real pixels, with the never-cover-everything rule applied. Width
+// is decided first and height gives way, so the result does not depend on which edge the
+// user happened to drag last — a geometry that answered differently for the same stored
+// dock would be impossible to test.
+export function dockSize(dock, viewport) {
+  const d = clampDock(dock);
+  const v = fitViewport(viewport);
+  const own = d.sizes[d.anchor];
+  const width = Math.min(own.width, v.width);
+  const height = Math.min(own.height, v.height);
+  const fillsWidth = width > Math.round(v.width * DOCK_MAX_FILL);
+  return {
+    width,
+    height: fillsWidth ? Math.min(height, Math.round(v.height * DOCK_MAX_FILL)) : height,
+  };
+}
+
+// Which corner of the POPOVER sits on the anchor point. This is what pins a panel to its
+// edge: a right-anchored panel held by its RIGHT corner grows leftwards under setWidth,
+// where one held by its left corner would walk off the screen.
+// Named DOCK_H and DOCK_V, not H and V. This block is COPIED into the creator's module
+// block, which also has the whole minified Owlbear SDK inlined above it — and that bundle
+// declares single-letter names at module top level, `V` among them. A duplicate top-level
+// const is a SyntaxError, and a SyntaxError in a module means the module never runs at
+// all. Shipped as 2.1: the sheet fell back to looking like the plain standalone creator,
+// with no header bar, no way to close the panel, and no character.
+//
+// Nothing added to this block may be named in one or two characters, ever.
+const DOCK_H = { left: ["LEFT", 0], center: ["CENTER", 0.5], right: ["RIGHT", 1] };
+const DOCK_V = { top: ["TOP", 0], center: ["CENTER", 0.5], bottom: ["BOTTOM", 1] };
+
+export function anchorParts(anchor) {
+  const a = DOCK_ANCHORS.includes(anchor) ? anchor : DOCK_DEFAULT.anchor;
+  if (a === "center") return { h: "center", v: "center" };
+  if (a === "top" || a === "bottom") return { h: "center", v: a };
+  if (a === "left" || a === "right") return { h: a, v: "center" };
+  const [v, h] = a.split("-");
+  return { h, v };
+}
+
+// The full OBR.popover.open argument, as a pure function so it can be tested without a
+// room.
+//
+// marginThreshold is MUI's minimum gap to the window edge and defaults to 16. A dock that
+// stops 16px short of the edge looks like a mistake, so it is zero here.
+export function sheetPopover({ url, dock, viewport }) {
+  const d = clampDock(dock);
+  const v = fitViewport(viewport);
+  const { width, height } = dockSize(d, v);
+  const { h, v: vert } = anchorParts(d.anchor);
+  const [hOrigin, hFrac] = DOCK_H[h];
+  const [vOrigin, vFrac] = DOCK_V[vert];
+
+  return {
+    id: SHEET_POPOVER_ID,
+    url,
+    width,
+    height,
+    anchorReference: "POSITION",
+    anchorPosition: {
+      left: Math.round(v.width * hFrac),
+      top: Math.round(v.height * vFrac),
+    },
+    anchorOrigin: { horizontal: "LEFT", vertical: "TOP" },
+    transformOrigin: { horizontal: hOrigin, vertical: vOrigin },
+    // Without this, the first click on the map dismisses the sheet — which is exactly
+    // the behaviour the docked sheet exists to get rid of.
+    disableClickAway: true,
+    marginThreshold: 0,
+  };
+}
+
+// Which edges of the panel face into the screen, and so can be dragged to resize. A
+// right-anchored panel has its right edge against the window, so only its left edge is
+// draggable; a centred one can be dragged on all four.
+export function resizeEdges(anchor) {
+  const { h, v } = anchorParts(anchor);
+  const edges = [];
+  if (h !== "left") edges.push("w");
+  if (h !== "right") edges.push("e");
+  if (v !== "top") edges.push("n");
+  if (v !== "bottom") edges.push("s");
+  return edges;
+}
+
+// The sheet writes this when you move or resize it; the roller and the context menu read
+// it so the next sheet opens where you left the last one. Both halves are served from
+// gsgrimoire.github.io, and an origin is scheme, host and port, so /dnm-cc/ and /dnm-obr/
+// share one localStorage. That is the same same-origin fact the relay was built on — it
+// was always true, it just could not carry a BroadcastChannel across a storage partition.
+export const DOCK_KEY = `${ID}/dock`;
+
+export function readDock(storage) {
+  try {
+    return clampDock(JSON.parse(storage.getItem(DOCK_KEY)));
+  } catch (err) {
+    return clampDock(null);
+  }
+}
+
+export function writeDock(storage, dock) {
+  const d = clampDock(dock);
+  try {
+    storage.setItem(DOCK_KEY, JSON.stringify(d));
+  } catch (err) {
+    /* private mode, or a full quota: the dock just does not persist */
+  }
+  return d;
+}
+
+// -------------------------------------------------------------
+// The GM panel's own dock (1.5)
+// -------------------------------------------------------------
+// The GM tools pop out the same way the sheet docks: a popover pinned to one of the nine
+// anchors, sized per anchor, zoomable. Everything about the geometry is the sheet's —
+// sheetPopover() is reused whole and only the id is swapped — because the constraint
+// that shaped it (size is live, position costs a reopen) is Owlbear's, not the sheet's.
+//
+// Two things differ and both are deliberate:
+//
+//   ITS OWN ID. The sheet and the GM panel are open at the same time; one id would make
+//   opening either close the other.
+//   ITS OWN STORAGE KEY, defaulting to the LEFT. The sheet defaults to the right, and a GM
+//   who moves one should not find the other has followed it there.
+//
+// Deliberately NOT inside the block the creator copies. The creator never opens this
+// panel, and dock.test.mjs compares the copied helpers one for one.
+export const GM_POPOVER_ID = `${ID}/gm-panel`;
+export const GM_DOCK_KEY = `${ID}/gm-dock`;
+export const GM_PANEL_PATH = "gm.html";
+
+export function readGmDock(storage) {
+  try {
+    const raw = storage && storage.getItem(GM_DOCK_KEY);
+    return clampDock(raw ? JSON.parse(raw) : { anchor: "left" });
+  } catch (err) {
+    return clampDock({ anchor: "left" });
+  }
+}
+
+export function writeGmDock(storage, dock) {
+  const d = clampDock(dock);
+  try {
+    if (storage) storage.setItem(GM_DOCK_KEY, JSON.stringify(d));
+  } catch (err) {
+    /* the dock just does not persist */
+  }
+  return d;
+}
+
+export function gmPopover({ url, dock, viewport }) {
+  return { ...sheetPopover({ url, dock, viewport }), id: GM_POPOVER_ID };
+}
+
+// The extension version in a place JavaScript can read. Its only consumer is
+// dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
+// it, because the manifest is the file everyone forgets on a release. Change both
+// together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
+export const EXT_VERSION = "1.5";
+// Kept at the original key so existing rooms do not lose their roll log.
+export const ROOM_KEY = "com.thuknights.dnm-rolls-beta/state";
+export const CHANNEL = `${ID}/events`;
+
+// v2 (extension 0.8.0): epochs added. A client running the v1 shape simply has no
+// epochs key; readers must default it rather than assume presence, because room
+// metadata written before 0.8.0 is still sitting in live rooms.
+// v3 (extension 0.9.5): compAt added — the die value at or above which a roll counts
+// as a Complication. 20 is the rulebook default; the GM lowers it to make a scene
+// harder. Rooms written before 0.9.5 have no compAt, so readers default it rather
+// than assume presence, exactly as epochs did.
+// v4 (extension 0.9.6): bonds added — a short queue of pending bond effects waiting
+// for the sheet they belong to. Same defaulting rule again: a room written before
+// 0.9.6 has no bonds key, and a reader must treat that as an empty queue.
+// v6 (extension 1.5): rushed added. Same defaulting rule as every key before it — a room
+// written before 1.5 has none, and a reader must treat that as "not rushed".
+export const EMPTY_STATE = {
+  v: 6, momentum: 0, threat: 0, log: [],
+  epochs: { scene: 0, session: 0, adventure: 0, breather: 0, break: 0, bed: 0 },
+  compAt: 20,
+  bonds: [],
+  // 1.4. Absent until the GM starts a round, and removed again when they end one.
+  initiative: null,
+  // 1.4. Whether players may see the party panel. The GM's switch, stored in the room
+  // so every client agrees. It defaults to SHARED because that is what this table
+  // asked for; the alternative would have been to keep the old GM-only behaviour and
+  // make the GM find a switch to get what they said they wanted.
+  partyShared: true,
+  // 1.5. The GM spent 2 Threat to deny the table its rest between scenes. Holds the
+  // scene epoch it was set in; see readRushed().
+  rushed: null,
+};
+
+// -------------------------------------------------------------
+// Rushed (1.5)
+// -------------------------------------------------------------
+// GM Guide p.101: "If the next scene is only a short time later, with no opportunity to
+// rest between them ... the GM may spend 2 Threat to reflect this, preventing the players
+// from taking this rest."
+//
+// WHY IT STORES A SCENE NUMBER RATHER THAN A FLAG. A flag needs someone to clear it, and
+// every clearing rule tried on paper was wrong for one order of presses or the other.
+// The press is "End Scene, rushed" — one action that ends the scene, pays the 2 Threat
+// and records the scene epoch it produced. The table is rushed for as long as the room is
+// still in THAT scene, and the next End Scene lifts it with nothing to remember. The GM
+// can also lift it by hand.
+//
+// It blocks Break and Bed as well as the Breather. The rule names the Breather because it
+// is the rest a table normally expects; with no time for five minutes there is no time
+// for a night's sleep either. Decided with the table, not inferred.
+//
+// It is a reminder, not a lock. Each sheet greys its own rest buttons, which is code
+// running in the player's own tab — the same honesty `mayMarkRow()` is written with. A
+// rest taken anyway still lands in the shared log.
+export function readRushed(state) {
+  const raw = state && state.rushed;
+  if (!raw || typeof raw !== "object") return false;
+  const at = Math.round(Number(raw.scene));
+  if (!Number.isFinite(at)) return false;
+  return at === readEpochs(state).scene;
+}
+
+// -------------------------------------------------------------
+// Initiative (1.4)
+// -------------------------------------------------------------
+// Who has acted this round, and which round it is. Lives in room metadata alongside
+// the epochs, for the same reason: every client has to agree, and it has to survive
+// a reload in the middle of a fight.
+//
+// WHY ROWS RATHER THAN A TURN POINTER: the table does not play in a strict order.
+// Anyone who has not acted may go, and the tracker's job is to say who is left, not
+// to say who is next. A pointer would be a rule the game does not have.
+//
+// HIDDEN ROWS, AND WHAT HIDING ACTUALLY MEANS:
+// Players see the tracker, which is the point of it. The GM can hide a row so the
+// table cannot see an adversary's name. A hidden row keeps its id, its position and
+// its acted flag in room metadata — but NOT its name, which is never published at
+// all. The GM's own client holds the names locally.
+//
+// That split is deliberate and follows the concealed-roll precedent: room metadata is
+// readable by every client in the room, so anything published there is public no
+// matter what the interface draws. A secret that lives in room metadata is not a
+// secret. The hidden log is kept in the GM's localStorage for exactly this reason,
+// and hidden row names are kept the same way.
+//
+// What IS still visible to a player is that a hidden row exists and whether it has
+// acted. That is correct: in a fight you can see something is taking its turn.
+export const MAX_INITIATIVE_ROWS = 24;
+export const INITIATIVE_NAME_MAX = 32;
+export const INITIATIVE_ACTIONS = new Set([
+  "start", "end", "next", "add", "remove", "move", "hide", "act",
+]);
+
+export function emptyInitiative() {
+  return { round: 1, rows: [] };
+}
+
+// Untrusted on the way out, like every other read of shared state: this arrives from
+// room metadata, which any client in the room can be tricked into writing through a
+// forged broadcast, and it is rendered in a loop.
+export function readInitiative(state) {
+  const found = state && state.initiative;
+  if (!found || typeof found !== "object") return null;
+  const round = Math.max(1, Math.min(999, Math.round(Number(found.round) || 1)));
+  const rows = (Array.isArray(found.rows) ? found.rows : [])
+    .filter((row) => row && typeof row === "object" && row.id)
+    .slice(0, MAX_INITIATIVE_ROWS)
+    .map((row) => ({
+      id: cleanText(row.id, 40),
+      // A hidden row's name is empty BY CONSTRUCTION — it was never published. This
+      // clamp is not what makes it secret; not writing it is.
+      name: row.hidden ? "" : cleanText(row.name, INITIATIVE_NAME_MAX),
+      kind: row.kind === "npc" ? "npc" : "pc",
+      acted: !!row.acted,
+      hidden: !!row.hidden,
+    }))
+    .filter((row) => row.id);
+  return { round, rows };
+}
+
+// What a player is allowed to see. The GM merges their local names back over this.
+export function publicInitiative(init) {
+  if (!init) return null;
+  return { round: init.round, rows: init.rows.map((row) => ({ ...row })) };
+}
+
+export function initiativeAllActed(init) {
+  const rows = init && Array.isArray(init.rows) ? init.rows : [];
+  return rows.length > 0 && rows.every((row) => row.acted);
+}
+
+// Who may tick a row. This lives here rather than in roller.js for the same reason
+// isGmOnlyEvent() does: it is a rule about who may do what, and a rule nobody can test
+// is a rule nobody can trust.
+//
+// Be clear about what it is. It is a COURTESY, not a control. It runs in the sender's
+// own tab, and background.js — the only real check in the system — has no map from a
+// connection id to a character, so it cannot tell whether a sender owns the row they
+// just ticked. This stops a misclick. A forged tick is one GM press to undo, which is
+// why it is not worth building the connection-to-character binding that would make it
+// airtight.
+export function mayMarkRow(row, { role, myNameKey } = {}) {
+  if (!row) return false;
+  if (role === "GM") return true;
+  // A player never ticks an adversary, and never ticks a row whose name they cannot
+  // even see — there is no way for them to know whose it is.
+  if (row.kind !== "pc" || row.hidden) return false;
+  const mine = bondNameKey(myNameKey || "");
+  return !!mine && row.id === "pc:" + mine;
+}
+
+// What to draw in a row's name. A hidden row published no name at all, so for the GM
+// it can only come from their own browser — and when it cannot, this says so rather
+// than inventing one.
+export function initRowLabel(row, { role, hiddenNames } = {}) {
+  if (!row) return "";
+  if (!row.hidden) return row.name || "Unnamed";
+  if (role !== "GM") return "Hidden";
+  const found = hiddenNames && hiddenNames[row.id];
+  return found ? String(found).slice(0, INITIATIVE_NAME_MAX) : "Hidden";
+}
+
+// The id a character's row carries. One character on two tokens is still one row,
+// which is why this is the name key and not a token id.
+export function initRowIdForCharacter(name) {
+  const key = bondNameKey(name);
+  return key ? "pc:" + key : "";
+}
+
+// Every mutation goes through here so the reducer stays a switch rather than a pile of
+// array surgery, and so the same rules can be tested without a room.
+export function applyInitiativeAction(init, ev) {
+  const current = init || emptyInitiative();
+  const rows = current.rows.slice();
+  const indexOf = (id) => rows.findIndex((row) => row.id === id);
+
+  switch (ev.action) {
+    case "start":
+      return emptyInitiative();
+    case "end":
+      return null;
+    case "next":
+      // Clearing acted is the whole of a new round. Rows, order and hidden flags all
+      // survive, because the fight has not changed — only the round has.
+      return {
+        round: Math.min(999, current.round + 1),
+        rows: rows.map((row) => ({ ...row, acted: false })),
+      };
+    case "add": {
+      if (rows.length >= MAX_INITIATIVE_ROWS) return current;
+      const id = cleanText(ev.id, 40);
+      if (!id || indexOf(id) >= 0) return current;
+      // 1.4C. A row can arrive ALREADY hidden, which is how an adversary is added:
+      // hiding it a moment later would publish its name for that moment. A hidden row
+      // is written without a name whatever the event carried, the same rule "hide"
+      // follows — not writing it is what keeps it secret.
+      const hidden = !!ev.hidden;
+      rows.push({
+        id,
+        name: hidden ? "" : cleanText(ev.name, INITIATIVE_NAME_MAX),
+        kind: ev.kind === "npc" ? "npc" : "pc",
+        acted: false,
+        hidden,
+      });
+      return { ...current, rows };
+    }
+    case "remove": {
+      const at = indexOf(cleanText(ev.id, 40));
+      if (at < 0) return current;
+      rows.splice(at, 1);
+      return { ...current, rows };
+    }
+    case "move": {
+      const at = indexOf(cleanText(ev.id, 40));
+      const delta = Math.round(Number(ev.delta) || 0);
+      if (at < 0 || !delta) return current;
+      const to = at + (delta > 0 ? 1 : -1);
+      // Clamped rather than wrapped: pressing up on the top row should do nothing,
+      // not send it to the bottom.
+      if (to < 0 || to >= rows.length) return current;
+      const [moved] = rows.splice(at, 1);
+      rows.splice(to, 0, moved);
+      return { ...current, rows };
+    }
+    case "hide": {
+      const at = indexOf(cleanText(ev.id, 40));
+      if (at < 0) return current;
+      const hidden = !!ev.hidden;
+      // Hiding DROPS the name from the published row rather than flagging it. The GM
+      // keeps it locally; nothing readable in the room ever held it once this ran.
+      rows[at] = { ...rows[at], hidden, name: hidden ? "" : cleanText(ev.name, INITIATIVE_NAME_MAX) };
+      return { ...current, rows };
+    }
+    case "act": {
+      const at = indexOf(cleanText(ev.id, 40));
+      if (at < 0) return current;
+      rows[at] = { ...rows[at], acted: !!ev.acted };
+      return { ...current, rows };
+    }
+    default:
+      return current;
+  }
+}
+
+// The range the GM may choose from. Below 15 a d20 would complicate more often than
+// not, which stops being a difficult scene and starts being a broken one.
+export const COMP_AT_MIN = 15;
+export const COMP_AT_MAX = 20;
+
+export function readCompAt(state) {
+  const raw = state?.compAt;
+  // Checked for absence BEFORE coercion. Number(null) is 0, which is finite, so a
+  // null would otherwise clamp to the floor and quietly make every roll of 15+ a
+  // Complication in a room that had never set a threshold.
+  if (raw === null || raw === undefined || raw === "") return COMP_AT_MAX;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return COMP_AT_MAX;
+  return Math.max(COMP_AT_MIN, Math.min(COMP_AT_MAX, n));
+}
+
+// The boundaries a GM can push to the whole table. Rests are listed alongside scene
+// boundaries because they work the same way here: a counter the GM increments and
+// each sheet catches up to. They differ only in what the sheet does on arrival.
+export const EPOCH_KEYS = ["scene", "session", "adventure", "breather", "break", "bed"];
+
+export function emptyEpochs() {
+  return EPOCH_KEYS.reduce((acc, k) => { acc[k] = 0; return acc; }, {});
+}
+
+// Always read epochs through this. Rooms predating 0.8.0 have no epochs key at all,
+// and a partial object is possible if a key is added in a later version.
+export function readEpochs(state) {
+  return { ...emptyEpochs(), ...(state?.epochs || {}) };
+}
+
+// Display names for the boundaries. Lived in roller.js until 0.9.0; moved here
+// because the party panel names the same boundaries when it says what a character
+// is waiting on, and two copies would drift the first time one is renamed.
+export const EPOCH_LABELS = {
+  breather: "Breather", break: "Break", bed: "Bed",
+  scene: "End Scene", session: "New Session", adventure: "New Adventure",
+};
+
+// -------------------------------------------------------------
+// Party status (0.9.0)
+// -------------------------------------------------------------
+// The character's half of the epoch bargain, read from the CP payload. This
+// deliberately MIRRORS readAppliedEpochs() in the creator rather than reimplementing
+// it: same six keys, same coercion, same "missing means null, not zero".
+//
+// The distinction that matters is null vs all-zeros. A character with no
+// appliedEpochs has never met this room. The creator's catchUpToRoomEpochs() adopts
+// the room's position for it and applies nothing, on purpose — otherwise every newly
+// built character would arrive and immediately run a rest it was never present for.
+// Reading that as zeros would report it as behind by however many boundaries the
+// table has been through, and send the GM chasing a player with nothing to catch up
+// on. That is the opposite of what this panel is for.
+export function readAppliedEpochs(char) {
+  const stored = char?.appliedEpochs;
+  if (!stored || typeof stored !== "object") return null;
+  return EPOCH_KEYS.reduce((acc, k) => {
+    acc[k] = Math.max(0, Math.round(Number(stored[k]) || 0));
+    return acc;
+  }, {});
+}
+
+// Returns { state: "unsynced" | "behind" | "current", pending: [boundaryKey] }.
+//
+// Applied ahead of the room is treated as current, not as an error. It happens
+// legitimately when room metadata is cleared or a room is rebuilt, and the creator's
+// own comparison is `room > applied` for the same reason.
+export function epochStatus(char, roomEpochs) {
+  const applied = readAppliedEpochs(char);
+  if (!applied) return { state: "unsynced", pending: [] };
+  const room = { ...emptyEpochs(), ...(roomEpochs || {}) };
+  const pending = EPOCH_KEYS.filter((k) => (Number(room[k]) || 0) > applied[k]);
+  return { state: pending.length ? "behind" : "current", pending };
+}
+export const MAX_LOG_ENTRIES = 40;
+export const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
+
+// -------------------------------------------------------------
+// Event sanitising (0.9.1)
+// -------------------------------------------------------------
+// Every sender in this codebase already clamps these fields before broadcasting.
+// That is not worth anything on its own: OBR.broadcast is open to every client in
+// the room, so the clamp runs in a tab the sender controls and can simply not run.
+// Until now the reducer took whatever arrived and put it straight in the log.
+//
+// Two things went wrong with an oversized entry, and neither needed malice — a bug
+// in a future sender would do it just as well:
+//
+//   1. `trimState()` drops log entries until the state fits, but it stops at one
+//      entry. A single entry larger than the budget therefore survives and the write
+//      exceeds the room's 16 kB, which is shared with every other extension in the
+//      room, not just this one.
+//   2. `renderRollEntry()` builds one DOM node per die. An entry claiming a hundred
+//      thousand dice freezes every client that renders the log, including the GM's.
+//
+// So the limits are enforced HERE, in the reducer both sides run, rather than at each
+// call site. A sender that forgets to clamp is now harmless, and so is one that never
+// intended to clamp at all.
+export const FIELD_LIMITS = { who: 24, label: 48, detail: 80, id: 40, dice: 20 };
+
+const DIE_KINDS = new Set(["crit", "success", "complication", "fail"]);
+
+function cleanText(value, max) {
+  return String(value == null ? "" : value).slice(0, max);
+}
+
+function cleanCount(value) {
+  const n = Math.round(Number(value) || 0);
+  return Number.isFinite(n) ? Math.max(0, Math.min(999, n)) : 0;
+}
+
+// Returns a normalised entry, or null when there is not enough here to log.
+// Entries already sitting in a live room were written by clamped senders, so running
+// them through this is idempotent and nothing in an existing log changes shape.
+export function sanitizeEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const id = cleanText(entry.id, FIELD_LIMITS.id);
+  if (!id) return null;
+
+  const t = Number(entry.t);
+  const base = {
+    id,
+    t: Number.isFinite(t) ? t : Date.now(),
+    who: cleanText(entry.who, FIELD_LIMITS.who),
+    label: cleanText(entry.label, FIELD_LIMITS.label),
+  };
+
+  if (entry.kind === "action") {
+    const pool = entry.pool === "momentum" || entry.pool === "threat" ? entry.pool : null;
+    const delta = Math.round(Number(entry.delta) || 0);
+    return {
+      ...base,
+      kind: "action",
+      detail: cleanText(entry.detail, FIELD_LIMITS.detail),
+      pool,
+      // Clamped rather than dropped: a delta is display only here, the pool itself
+      // moves through the "pool" event, so a silly number misinforms rather than
+      // miscounts. It still must not be unbounded text in the metadata.
+      delta: Math.max(-999, Math.min(999, delta)),
+    };
+  }
+
+  // A roll entry. `detail` is the dice, and it is the field that has to be bounded
+  // hardest — it is the only one the renderer loops over.
+  const detail = Array.isArray(entry.detail) ? entry.detail : [];
+  return {
+    ...base,
+    detail: detail.slice(0, FIELD_LIMITS.dice).map((d) => ({
+      d: cleanCount(d && d.d),
+      kind: DIE_KINDS.has(d && d.kind) ? d.kind : "fail",
+    })),
+    an: cleanText(entry.an, FIELD_LIMITS.label),
+    av: cleanCount(entry.av),
+    sn: cleanText(entry.sn, FIELD_LIMITS.label),
+    sv: cleanCount(entry.sv),
+    diff: cleanCount(entry.diff),
+    succ: cleanCount(entry.succ),
+    comp: cleanCount(entry.comp),
+    pass: !!entry.pass,
+    gain: cleanCount(entry.gain),
+    hidden: !!entry.hidden,
+    // 0.9.5. `gain` already records the surplus; these two decide whether it can still
+    // be claimed and by whom, so they have to survive the round trip like `conceal`.
+    claimed: !!entry.claimed,
+    compAt: cleanCount(entry.compAt) || COMP_AT_MAX,
+    // 0.9.4. These decide who may draw the entry, so the reducer has to carry them —
+    // stripping them here would turn a concealed roll into an ordinary one the moment
+    // it round-tripped through room metadata, which is the worst possible failure for
+    // this feature. Both are constrained rather than copied: an arbitrary `conceal`
+    // string would fall through canRevealConcealed() as "not concealed".
+    conceal: entry.conceal === "hidden" || entry.conceal === "secret" ? entry.conceal : null,
+    by: cleanText(entry.by, FIELD_LIMITS.id) || null,
+  };
+}
+
+// -------------------------------------------------------------
+// Who may read a concealed roll (0.9.4)
+// -------------------------------------------------------------
+// Two kinds of concealment, and they give very different guarantees.
+//
+// SECRET is absolute. Nothing is broadcast and nothing is written to room metadata,
+// so the result exists only in the roller's own browser. Only the GM may roll it.
+//
+// HIDDEN is a courtesy, and it is important to be straight about that. From 0.9.4 a
+// player's hidden roll must reach the GM — "the GM should know everything" — and
+// Owlbear offers NO private channel to do it with: `OBR.broadcast.sendMessage` takes
+// only ALL, REMOTE or LOCAL, and every storage surface it has (room metadata, player
+// metadata, item metadata) is readable by every client in the room.
+//
+// So the full entry travels to everyone and each client decides what to draw. That
+// hides the result from other players' SCREENS. It does not hide it from a player who
+// opens devtools. Anyone wanting a result that a player genuinely cannot read has to
+// use Secret, which is why Secret still exists rather than being folded into Hidden.
+//
+// 0.9.3 sent a redacted placeholder instead, which really was unreadable — but it also
+// meant the GM could not see a player's hidden roll, which is the thing being fixed.
+export function canRevealConcealed(entry, viewer) {
+  if (!entry || !entry.conceal) return true;      // an ordinary roll
+  // A secret roll never leaves its own browser, so anything holding one may draw it.
+  if (entry.conceal === "secret") return true;
+  if (viewer?.role === "GM") return true;
+  return !!(viewer?.playerId && entry.by === viewer.playerId);
+}
+
+// -------------------------------------------------------------
+// Bond effects (0.9.6)
+// -------------------------------------------------------------
+// A bond pays out on somebody ELSE'S sheet, and at any moment nearly every sheet at
+// the table is closed. That is the same problem epochs solved, so this is the same
+// answer: a small queue in room metadata that each sheet drains when it next opens,
+// rather than a broadcast that only reaches whoever happens to be looking.
+//
+// Two kinds, and they resolve at opposite ends, which is not an inconsistency but
+// the rules:
+//
+//   RIVALRY  "When an ally with whom the character has a rivalry regains one or more
+//            Spirit by adding to Threat, the character recovers one Spirit as well."
+//            The BOND HOLDER benefits, and only their sheet knows their bond list.
+//            So Adrenaline Rush announces the actor and nothing else; every other
+//            sheet decides for itself whether it is owed a Spirit. Note the
+//            direction — it reads backwards at first. The person spending Threat
+//            does not need a bond at all.
+//
+//   GRANT    Second Wind, and giving up Spirit at a rest. Here the HELPER holds the
+//            bond and the +1 lands on the ally, so the helper has to name a target
+//            and works the sum out at their end. The queue just carries the total.
+//
+// Not GM-only. A forged rivalry effect can only land on a sheet that already holds a
+// rivalry naming that actor, for one Spirit; a forged grant names a target who has to
+// exist. That is ordinary play with a typo, not a privilege to guard, and putting it
+// in isGmOnlyEvent() would break every bond at a GM-less table.
+export const MAX_BOND_EFFECTS = 12;
+
+// An effect older than this is dropped rather than kept waiting. A player who has not
+// opened their sheet in six hours is at a different session, and arriving to a Spirit
+// from a fight two weeks ago is worse than missing it.
+export const BOND_EFFECT_TTL_MS = 6 * 60 * 60 * 1000;
+
+// 0.9.8 adds "drive": the Maverick temperament's "when the GM spends 3 or more Threat
+// at once, regain 1 Spirit". It travels the same queue as the two bonds because it has
+// the same problem — it pays out on sheets that are shut.
+//
+// 1.5 adds two more, both GM-only and both for the same reason — they pay out on sheets
+// that are shut:
+//
+//   ADVERSITY  GM Guide p.125: "Characters gain growth when they face adversity, in any
+//              situation where you spend three or more Threat in one go." One Growth to
+//              each character it names. Sent from the same place the Maverick drive is,
+//              because it reads the same spend.
+//   REVERSAL   GM Guide p.115: "let each of the PCs recover half their maximum Spirit when
+//              the scene ends." Only the sheet knows its own maximum, so the queue carries
+//              no amount — each sheet works out its own half.
+//
+// Both carry `targets`: the names of the characters on tokens in the scene when the GM
+// pressed. A character in another scene, or attached to nobody, is not facing this
+// adversity. An effect with no targets reaches every sheet, which is what the creator's
+// own sender does — it cannot read the scene.
+const BOND_KINDS = new Set(["rivalry", "grant", "drive", "adversity", "reversal"]);
+const GM_BOND_KINDS = new Set(["drive", "adversity", "reversal"]);
+export const MAX_EFFECT_TARGETS = 8;
+
+// The threshold in the Maverick drive's own text. Below 0.9.7 this was undetectable:
+// a GM spending 3 pressed - three times and it arrived as three spends of 1, so
+// "at once" had nothing to read. Coalescing is what made this possible at all.
+export const DRIVE_THREAT_SPEND_MIN = 3;
+
+// Bond names are free text typed during character creation, and the character names
+// they have to match are free text too. Case and stray spaces are the difference
+// between a bond that fires and one that silently does nothing, so both sides
+// normalise through this single function rather than each comparing in its own way.
+export function bondNameKey(name) {
+  return String(name == null ? "" : name).trim().toLowerCase();
+}
+
+export function bondNamesMatch(a, b) {
+  const x = bondNameKey(a);
+  return !!x && x === bondNameKey(b);
+}
+
+export function sanitizeBondEffect(effect) {
+  if (!effect || typeof effect !== "object") return null;
+  if (!BOND_KINDS.has(effect.kind)) return null;
+  const id = cleanText(effect.id, FIELD_LIMITS.id);
+  if (!id) return null;
+  const t = Number(effect.t);
+  const base = {
+    id,
+    t: Number.isFinite(t) ? t : Date.now(),
+    kind: effect.kind,
+    // Who caused it. Present on both kinds so the recipient's log can say why.
+    from: cleanText(effect.from, FIELD_LIMITS.who),
+  };
+  if (effect.kind === "rivalry") return base;
+
+  if (effect.kind === "adversity" || effect.kind === "reversal") {
+    const targets = (Array.isArray(effect.targets) ? effect.targets : [])
+      .slice(0, MAX_EFFECT_TARGETS)
+      .map((n) => cleanText(n, FIELD_LIMITS.who))
+      .filter((n) => n.trim());
+    return {
+      ...base,
+      targets,
+      // The size of the spend, for the recipient's log line. Reversal carries none.
+      amount: Math.max(0, Math.min(999, Math.round(Number(effect.amount) || 0))),
+    };
+  }
+
+  if (effect.kind === "drive") {
+    // No target: like a rivalry, every sheet decides for itself whether it is owed —
+    // here by reading its own temperament rather than its own bond list. `amount` is
+    // the size of the spend, carried only so the recipient's log can say what
+    // happened, and clamped like any other untrusted number.
+    return {
+      ...base,
+      drive: cleanText(effect.drive, FIELD_LIMITS.id),
+      amount: Math.max(0, Math.min(999, Math.round(Number(effect.amount) || 0))),
+    };
+  }
+
+  const amount = Math.round(Number(effect.amount) || 0);
+  return {
+    ...base,
+    target: cleanText(effect.target, FIELD_LIMITS.who),
+    // Second Wind restores at most 3, plus at most 1 from a supportive bond. Four is
+    // the ceiling the rules allow and the reducer is where it is worth enforcing,
+    // because the sender's clamp runs in a tab the sender controls.
+    amount: Math.max(0, Math.min(4, amount)),
+    source: cleanText(effect.source, FIELD_LIMITS.label),
+  };
+}
+
+// Rooms written before 0.9.6 have no bonds key at all, so this defaults rather than
+// assuming presence — the same rule readEpochs() and readCompAt() follow.
+export function readBondQueue(state) {
+  const raw = Array.isArray(state?.bonds) ? state.bonds : [];
+  return raw.map(sanitizeBondEffect).filter(Boolean);
+}
+
+// Age out, then cap. Ordered oldest first so a sheet draining the queue applies
+// effects in the order they happened.
+export function pruneBondQueue(queue, now = Date.now()) {
+  return queue
+    .filter((fx) => now - fx.t <= BOND_EFFECT_TTL_MS)
+    .slice(-MAX_BOND_EFFECTS);
+}
+
+// -------------------------------------------------------------
+// Coalescing pool nudges (0.9.7)
+// -------------------------------------------------------------
+// Reported from play: raising Threat by 3 meant pressing + three times, which sent
+// three pool events and wrote three "added 1 Threat" lines. The log recorded the
+// clicking rather than the decision, and the table had to add the lines up.
+//
+// So a run of nudges to the SAME pool with the SAME label is summed and sent once:
+// one pool event, one log line reading "added 3 Threat". A different pool or a
+// different label flushes the run first, which is what keeps an ability from being
+// folded into a manual adjustment — every ability passes a reason, and "Nanobarrier"
+// is not "manual adjustment", so they can never merge.
+//
+// This also makes the Maverick drive readable. "When the GM spends 3 or more Threat
+// AT ONCE" was undetectable when a spend of 3 arrived as three separate ones.
+//
+// THE DISPLAY PROBLEM, AND WHY peek() EXISTS:
+// Pool events are deltas and are never applied optimistically — applying locally and
+// again from the GM's update would double count. So without help the number would sit
+// still for the length of the window and the buttons would feel broken. peek() reports
+// what has been counted but not yet confirmed, so a display can show the value the
+// player expects and mark it as unsettled.
+//
+// It keeps reporting across the flush, until settle() is called or the safety timeout
+// fires. Clearing on flush instead would drop the number back to its old value for the
+// length of the broadcast round trip — a visible flinch on every press.
+export const POOL_BATCH_MS = 900;      // quiet period before a run is sent
+export const POOL_BATCH_MAX_MS = 2500; // ceiling, so holding a button still lands
+export const POOL_SETTLE_MS = 5000;    // give up waiting for confirmation
+
+export function createPoolBatcher(send, opts = {}) {
+  const delay = opts.delay ?? POOL_BATCH_MS;
+  const maxWait = opts.maxWait ?? POOL_BATCH_MAX_MS;
+  const settleAfter = opts.settleAfter ?? POOL_SETTLE_MS;
+
+  let pending = null;   // { pool, label, delta }
+  let timer = null;
+  let deadline = 0;
+  let settleTimer = null;
+  const inFlight = { momentum: 0, threat: 0 };
+
+  const stopTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+  // Called when the room's own value arrives, which is the only real confirmation
+  // there is. Until then the display is showing a promise.
+  function settle() {
+    if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+    inFlight.momentum = 0;
+    inFlight.threat = 0;
+  }
+
+  function flush() {
+    stopTimer();
+    const batch = pending;
+    pending = null;
+    deadline = 0;
+    // A run that cancels itself out — one press up, one down — is not an event and
+    // not a log line. Previously it was two of each.
+    if (!batch || !batch.delta) return null;
+    inFlight[batch.pool] = (inFlight[batch.pool] || 0) + batch.delta;
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(settle, settleAfter);
+    send(batch);
+    return batch;
+  }
+
+  function add(pool, delta, label) {
+    const n = Math.round(Number(delta) || 0);
+    if (!n) return;
+    if (pending && (pending.pool !== pool || pending.label !== label)) flush();
+    if (!pending) {
+      pending = { pool, label, delta: 0 };
+      deadline = Date.now() + maxWait;
+    }
+    pending.delta += n;
+    // Debounced, but never past the ceiling: someone leaning on + should still see
+    // the pool move rather than nothing at all until they stop.
+    stopTimer();
+    timer = setTimeout(flush, Math.max(0, Math.min(delay, deadline - Date.now())));
+  }
+
+  function peek(pool) {
+    const queued = pending && pending.pool === pool ? pending.delta : 0;
+    return queued + (inFlight[pool] || 0);
+  }
+
+  return { add, flush, peek, settle };
+}
+
+// -------------------------------------------------------------
+// Which events require the GM (0.9.2)
+// -------------------------------------------------------------
+// Enforced in background.js, which is the only writer of room metadata and therefore
+// the only place a check counts. It lives HERE so it can be tested without a live
+// room, and so there is one statement of the rule rather than one per caller.
+//
+// 0.9.1 made every Threat change GM-only. That was wrong about the game and broke
+// real play. Adding Threat is something PLAYERS do: Nanobarrier charges it,
+// Adrenaline Rush pays in it, and several items add it on use, all routed through the
+// creator's addThreat(). Blocking those meant a Sentinel could press Barrier, watch
+// the cost announce itself in the log, and see the pool never move.
+//
+// The creator's own tooltip had it right all along — "Anyone can add; only the GM
+// should spend" — so what is privileged is the DIRECTION, not the pool. A player can
+// pay Threat in and cannot drain it.
+// 1.5: "rush" — denying the table its rest reaches every sheet, which is the same reason
+// an epoch is privileged.
+const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt", "partyShared", "rush"]);
+
+export function isGmOnlyEvent(ev) {
+  if (!ev || typeof ev !== "object") return false;
+  if (GM_ONLY_TYPES.has(ev.type)) return true;
+  // 0.9.8. The Maverick drive reads "when THE GM spends", so the announcement is the
+  // GM's to make. Unlike the two bonds — which a forged copy could only pay to someone
+  // who already holds the matching bond — a forged drive would reach every Maverick at
+  // the table on nobody's authority. It is cheap to put it behind the real check, so
+  // it goes behind the real check.
+  // 1.5: adversity and reversal join it. Both read "the GM spends", and a forged one
+  // would hand Growth or half a Spirit track to the whole table.
+  if (ev.type === "bond") return GM_BOND_KINDS.has(ev.effect?.kind);
+  // 1.4. Running the round is the GM's: starting, ending, adding, removing, ordering
+  // and hiding all reach every client and none of them is a thing a player does.
+  //
+  // Marking a turn ended is NOT privileged, and that is a considered choice. Players
+  // mark themselves, which is the participatory half of the feature. The rule "a
+  // player may only mark their own row" cannot be enforced here — this page verifies
+  // connection ids against the room's GMs and has no map from a connection to a
+  // character, so it cannot tell whether a sender owns the row they just ticked. The
+  // sender-side check stops an honest misclick; a forged one is one GM click to undo.
+  // That is the same reasoning bond effects run on, and the cost of making it airtight
+  // (a connection-to-character binding) is out of proportion to a reversible tick.
+  if (ev.type === "init") return ev.action !== "act";
+  // Momentum is the group's pool and stays open to everyone, both directions.
+  if (ev.type !== "pool" || ev.pool !== "threat") return false;
+  return (Math.round(Number(ev.delta) || 0)) < 0;
+}
+
+// -------------------------------------------------------------
+// Shared event reducer
+// -------------------------------------------------------------
+// Rolls and pool changes travel as broadcast events rather than each client
+// writing room metadata directly. Two reasons:
+//
+//   1. Broadcast is not role restricted, so a player can announce a roll even
+//      where a direct metadata write would be refused.
+//   2. It makes the GM the only writer. The previous read-modify-write from
+//      every client meant two simultaneous rolls could clobber each other.
+//
+// Every client applies events locally for an instant view; the GM's background
+// page applies the same events to room metadata so history survives refreshes
+// and late joins. Because both sides run this same function, they converge.
+//
+// Roll events carry an id and are deduplicated, so applying one twice is safe.
+// Pool events are deltas and cannot be, which is why clients do not apply them
+// optimistically and instead wait for the GM's metadata update.
+export function applyEvent(state, ev) {
+  const next = { ...EMPTY_STATE, ...state };
+  next.log = Array.isArray(next.log) ? next.log.slice() : [];
+
+  if (ev?.type === "roll" && ev.entry) {
+    const entry = sanitizeEntry(ev.entry);
+    if (!entry) return next;
+    if (next.log.some((e) => e.id === entry.id)) return next;
+    next.log.unshift(entry);
+    next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+  } else if (ev?.type === "action" && ev.entry) {
+    // v1.17. Actions share the log with rolls: same dedupe by id, same cap, same
+    // trim budget. They are deliberately not a second list — the point of the log
+    // is one ordered record of what happened at the table, and two lists would
+    // need interleaving by timestamp at every consumer instead of once here.
+    //
+    // An action entry carries kind:"action". A roll entry carries no kind at all,
+    // including the ones already sitting in a live room's metadata from before
+    // v1.17, which is why consumers must treat a missing kind as a roll rather
+    // than requiring the field.
+    const entry = sanitizeEntry(ev.entry);
+    if (!entry) return next;
+    if (next.log.some((e) => e.id === entry.id)) return next;
+    next.log.unshift(entry);
+    next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+  } else if (ev?.type === "epoch" && EPOCH_KEYS.includes(ev.boundary)) {
+    // v0.8.0. The GM pushes a boundary to the whole table by incrementing a counter
+    // here. Nothing about any character is touched, and nothing needs to know what a
+    // character looks like — this file stays ignorant of the DM1 format, which is the
+    // whole reason the snapshot split exists.
+    //
+    // Each sheet stores the epoch it last applied and catches up when it next opens.
+    // That is what makes this work for the sheets that are CLOSED, which at any moment
+    // is nearly all of them. A broadcast alone would only reach whoever happened to be
+    // looking at their sheet when the GM pressed the button.
+    //
+    // Monotonic increment, never assignment: two GMs, or a GM with the panel open in
+    // two windows, cannot clobber each other into a lower value.
+    const epochs = readEpochs(next);
+    epochs[ev.boundary] = epochs[ev.boundary] + 1;
+    next.epochs = epochs;
+    // 1.4. A scene boundary ends the fight, so it ends the round tracking with it.
+    // Only End Scene, and not the rests: a Breather happens DURING a fight and
+    // clearing the tracker under the table mid-combat would be worse than useless.
+    if (ev.boundary === "scene") next.initiative = null;
+    // The press is logged like any other action so the table sees who called the rest.
+    const entry = sanitizeEntry(ev.entry);
+    if (entry && !next.log.some((e) => e.id === entry.id)) {
+      next.log.unshift(entry);
+      next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+    }
+  } else if (ev?.type === "pool" && (ev.pool === "momentum" || ev.pool === "threat")) {
+    // Bounded per event. Unbounded, one forged delta sets a pool to Number.MAX_VALUE
+    // and every subsequent arithmetic on it is meaningless until the room is rebuilt.
+    const delta = Math.round(Number(ev.delta) || 0);
+    const bounded = Math.max(-999, Math.min(999, delta));
+    next[ev.pool] = Math.max(0, Math.min(9999, (next[ev.pool] || 0) + bounded));
+  } else if (ev?.type === "claim" && ev.id) {
+    // 0.9.5. Marks a roll's surplus Momentum as taken. Shared state rather than local,
+    // so the button greys out on EVERY client — otherwise two people would each see an
+    // unclaimed roll and the pool would gain the surplus twice.
+    //
+    // One-way and idempotent: claiming an already-claimed entry changes nothing, which
+    // is what makes a double-click or a re-delivered broadcast harmless.
+    next.log = next.log.map((e) => (e.id === ev.id ? { ...e, claimed: true } : e));
+  } else if (ev?.type === "bond" && ev.effect) {
+    // 0.9.6. Deduplicated by id like a roll, for the same reason: a broadcast can be
+    // delivered twice, and an effect that pays out twice is a free Spirit.
+    const effect = sanitizeBondEffect(ev.effect);
+    if (!effect) return next;
+    const queue = readBondQueue(next);
+    if (queue.some((fx) => fx.id === effect.id)) return next;
+    next.bonds = pruneBondQueue([...queue, effect]);
+  } else if (ev?.type === "compAt") {
+    // Assignment, not increment: the GM is choosing a value, and two GM windows
+    // settling on the same number is the correct outcome rather than a conflict.
+    next.compAt = Math.max(COMP_AT_MIN, Math.min(COMP_AT_MAX, Math.round(Number(ev.value) || COMP_AT_MAX)));
+  } else if (ev?.type === "init" && INITIATIVE_ACTIONS.has(ev.action)) {
+    next.initiative = applyInitiativeAction(readInitiative(next), ev);
+  } else if (ev?.type === "partyShared") {
+    next.partyShared = !!ev.value;
+  } else if (ev?.type === "rush") {
+    // 1.5. Stamped with the scene the room is in NOW, which is why the GM panel sends
+    // this after its End Scene rather than before: the rush covers the scene that
+    // follows the one it ended. See readRushed().
+    next.rushed = ev.value ? { scene: readEpochs(next).scene } : null;
+    const entry = sanitizeEntry(ev.entry);
+    if (entry && !next.log.some((e) => e.id === entry.id)) {
+      next.log.unshift(entry);
+      next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+    }
+  } else if (ev?.type === "clear") {
+    next.log = [];
+  }
+  return next;
+}
+
+// Trim to fit the room metadata budget before writing.
+export function trimState(state) {
+  const next = { ...state };
+  // Epochs are a fixed handful of integers and must survive trimming. Losing one
+  // would send every sheet backwards and re-apply a boundary the table already had.
+  next.epochs = readEpochs(next);
+  next.compAt = readCompAt(next);
+  // 1.4. The spread above already CARRIES the initiative through, so this is not
+  // what keeps it alive — the loop below only pops log entries. What this does is
+  // NORMALISE it, and that is the part that matters here.
+  //
+  // The loop stops at one log entry. A forged initiative carrying two thousand rows
+  // would therefore sit in the state, the log would be stripped to nothing trying to
+  // make room, and the write would still blow the 16 kB budget — which breaks room
+  // metadata for every other extension in the room, not just this one. Clamping it
+  // on the way through is the same discipline the log entry fields already follow.
+  //
+  // partyShared defaults to true for a room written before 1.4, which has no such
+  // key. Reading a missing flag as false would silently put the switch in the
+  // opposite position from the documented default.
+  next.initiative = readInitiative(next);
+  next.partyShared = next.partyShared !== false;
+  // 1.5. Normalised to the one shape readRushed() reads, and dropped once it has lapsed:
+  // a rush from three scenes ago is just bytes.
+  next.rushed = readRushed(next) ? { scene: readEpochs(next).scene } : null;
+  // 0.9.6. Pending bond effects are trimmed by age and count here, and then left
+  // alone by the loop below. They are a dozen small objects at most, and unlike a log
+  // line an undrained one still owes somebody a Spirit — so the log gives way to them
+  // rather than the other way round.
+  next.bonds = pruneBondQueue(readBondQueue(next));
+  next.log = (next.log || []).slice(0, MAX_LOG_ENTRIES);
+  while (next.log.length > 1 && JSON.stringify(next).length > MAX_STATE_BYTES) next.log.pop();
+  return next;
+}
+
+export const ATTRS = { might: "Might", quickness: "Quickness", insight: "Insight", resolve: "Resolve" };
+export const SKILLS = {
+  fight: "Fight", move: "Move", operate: "Operate", sneak: "Sneak",
+  study: "Study", survive: "Survive", talk: "Talk",
+};
+
+// -------------------------------------------------------------
+// Base64 helpers
+// -------------------------------------------------------------
+// The creator strips '=' padding when building a code, so we re-pad before
+// decoding. It also URI-encodes before base64 so non-ASCII names survive.
+export function b64decode(v) {
+  let x = v.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = x.length % 4;
+  if (pad === 2) x += "==";
+  else if (pad === 3) x += "=";
+  return decodeURIComponent(atob(x));
+}
+
+export function b64encode(str) {
+  return btoa(encodeURIComponent(str)).replace(/=/g, "");
+}
+
+// ==== BEGIN SHARED CODEC — verbatim twin in dnm-cc/index.html ====
+// codec.test.mjs compares the two character for character. Regenerate the
+// other copy rather than editing it; only the `export ` keywords differ.
+
+// -------------------------------------------------------------
+// The payload codec (DM2)
+// -------------------------------------------------------------
+// v1.3. A DM1 code encoded every payload as btoa(encodeURIComponent(json)),
+// which costs about 2.07x the JSON: the URI step turns each non-ASCII byte into
+// three ASCII characters and base64 then inflates that again. Measured on a real
+// played character the whole code came to 9,761 characters, of which 6,405 was
+// the SN snapshot and 3,135 the CP payload — for 1,513 characters of actual
+// character. DM2 deflates each payload before base64 and the same code is 3,038.
+//
+// WHY THIS IS WRITTEN OUT BY HAND rather than using CompressionStream:
+// buildCharacterCode() is synchronous and is called from about forty mutation
+// sites through saveCharacterLocal(), and again from queueSave() on every render.
+// CompressionStream is promise-based, so adopting it would put an await in the
+// middle of the token write and turn every one of those call sites into a race.
+// This codec is synchronous and costs about 0.4ms for a whole character code.
+//
+// WHY IT EMITS REAL DEFLATE (RFC 1951) rather than something bespoke: a payload
+// that any zlib, any DecompressionStream and any Python install can read is a
+// durability property in itself. If both halves of this toolchain disappear, a
+// backup file is still a base64 deflate stream and the characters come back.
+//
+// The encoder emits fixed-Huffman blocks only (BTYPE=01), which needs no tree
+// construction and costs roughly 15% against zlib's dynamic trees — 3,802 rather
+// than 3,038 on that same character. The decoder reads all three block types, so
+// it can read anything a standards-compliant encoder produces, including our own
+// output if the encoder is ever upgraded to dynamic trees.
+//
+// codec.test.mjs fuzzes this against zlib in BOTH directions over 400 generated
+// inputs plus real payloads: our encoder into zlib's decoder, zlib's encoder at
+// four levels into our decoder, and our own round trip.
+
+const LEN_BASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+const LEN_EXTRA = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+const DIST_BASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+const DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+const CODE_LEN_ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+
+const MAX_MATCH = 258;
+const MIN_MATCH = 3;
+const WINDOW = 32768;
+// How far back along one hash chain to look. Deflate's own "good enough" cut-off.
+// Unbounded, a payload of one repeated character walks the whole chain per byte.
+const CHAIN_LIMIT = 128;
+
+// Huffman codes are written most significant bit first; everything else in the
+// format is least significant bit first. Getting these two the same way round is
+// the classic way to produce a stream that only your own decoder can read.
+function bitWriter() {
+  const bytes = [];
+  let cur = 0, used = 0;
+  const put = (bit) => {
+    cur |= bit << used;
+    if (++used === 8) { bytes.push(cur); cur = 0; used = 0; }
+  };
+  return {
+    bits(value, count) { for (let i = 0; i < count; i++) put((value >> i) & 1); },
+    huff(code, count) { for (let i = count - 1; i >= 0; i--) put((code >> i) & 1); },
+    finish() { if (used) bytes.push(cur); return Uint8Array.from(bytes); },
+  };
+}
+
+// RFC 1951 3.2.6. The fixed literal/length alphabet is four ranges with three
+// different code lengths, which is why this cannot be a single table lookup.
+function writeFixedSymbol(writer, symbol) {
+  if (symbol <= 143) writer.huff(0x30 + symbol, 8);
+  else if (symbol <= 255) writer.huff(0x190 + symbol - 144, 9);
+  else if (symbol <= 279) writer.huff(symbol - 256, 7);
+  else writer.huff(0xC0 + symbol - 280, 8);
+}
+
+export function deflateRaw(bytes) {
+  const writer = bitWriter();
+  writer.bits(1, 1);   // BFINAL — one block, always
+  writer.bits(1, 2);   // BTYPE 01 — fixed Huffman
+  const chains = new Map();
+  const remember = (at) => {
+    if (at + MIN_MATCH > bytes.length) return;
+    const key = bytes[at] * 65536 + bytes[at + 1] * 256 + bytes[at + 2];
+    let chain = chains.get(key);
+    if (!chain) chains.set(key, chain = []);
+    chain.push(at);
+  };
+  let i = 0;
+  while (i < bytes.length) {
+    let matchLen = 0, matchDist = 0;
+    if (i + MIN_MATCH <= bytes.length) {
+      const chain = chains.get(bytes[i] * 65536 + bytes[i + 1] * 256 + bytes[i + 2]);
+      if (chain) {
+        const ceiling = Math.min(MAX_MATCH, bytes.length - i);
+        for (let k = chain.length - 1; k >= 0 && chain.length - k <= CHAIN_LIMIT; k--) {
+          const at = chain[k];
+          const dist = i - at;
+          if (dist > WINDOW) break;   // the chain is in order, so everything older is too far
+          let len = 0;
+          while (len < ceiling && bytes[at + len] === bytes[i + len]) len++;
+          if (len > matchLen) { matchLen = len; matchDist = dist; if (len === ceiling) break; }
+        }
+      }
+    }
+    if (matchLen >= MIN_MATCH) {
+      let li = 0;
+      while (li < LEN_BASE.length - 1 && LEN_BASE[li + 1] <= matchLen) li++;
+      writeFixedSymbol(writer, 257 + li);
+      writer.bits(matchLen - LEN_BASE[li], LEN_EXTRA[li]);
+      let di = 0;
+      while (di < DIST_BASE.length - 1 && DIST_BASE[di + 1] <= matchDist) di++;
+      writer.huff(di, 5);   // fixed distance codes are five straight bits
+      writer.bits(matchDist - DIST_BASE[di], DIST_EXTRA[di]);
+      for (let n = 0; n < matchLen; n++) remember(i + n);
+      i += matchLen;
+    } else {
+      writeFixedSymbol(writer, bytes[i]);
+      remember(i);
+      i++;
+    }
+  }
+  writeFixedSymbol(writer, 256);   // end of block
+  return writer.finish();
+}
+
+// Canonical Huffman, RFC 1951 3.2.2: sort by code length, then by symbol, and
+// the codes fall out. Keyed on length and code together because the same numeric
+// code means different symbols at different lengths.
+function huffmanTable(lengths) {
+  let maxLen = 0;
+  for (const len of lengths) if (len > maxLen) maxLen = len;
+  const countByLen = new Array(maxLen + 1).fill(0);
+  for (const len of lengths) if (len) countByLen[len]++;
+  const nextCode = new Array(maxLen + 1).fill(0);
+  let code = 0;
+  for (let len = 1; len <= maxLen; len++) {
+    code = (code + countByLen[len - 1]) << 1;
+    nextCode[len] = code;
+  }
+  const table = new Map();
+  for (let symbol = 0; symbol < lengths.length; symbol++) {
+    const len = lengths[symbol];
+    if (len) table.set(len * 65536 + nextCode[len]++, symbol);
+  }
+  return { table, maxLen };
+}
+
+function bitReader(bytes) {
+  let pos = 0, bit = 0;
+  const self = {
+    bits(count) {
+      let value = 0;
+      for (let i = 0; i < count; i++) {
+        if (pos >= bytes.length) throw new Error("deflate: input ended mid-symbol");
+        value |= ((bytes[pos] >> bit) & 1) << i;
+        if (++bit === 8) { bit = 0; pos++; }
+      }
+      return value;
+    },
+    align() { if (bit) { bit = 0; pos++; } },
+    byte() {
+      if (pos >= bytes.length) throw new Error("deflate: input ended mid-symbol");
+      return bytes[pos++];
+    },
+    symbol(tree) {
+      let code = 0;
+      for (let len = 1; len <= tree.maxLen; len++) {
+        code = (code << 1) | self.bits(1);
+        const found = tree.table.get(len * 65536 + code);
+        if (found !== undefined) return found;
+      }
+      throw new Error("deflate: no symbol for that code");
+    },
+  };
+  return self;
+}
+
+let fixedLiteralTree = null, fixedDistanceTree = null;
+
+export function inflateRaw(bytes) {
+  const reader = bitReader(bytes);
+  const out = [];
+  let final = 0;
+  do {
+    final = reader.bits(1);
+    const type = reader.bits(2);
+    if (type === 0) {
+      // Stored. LEN then its one's complement, which we skip rather than verify:
+      // a corrupt payload fails at JSON.parse either way, with a better message.
+      reader.align();
+      const len = reader.byte() | (reader.byte() << 8);
+      reader.byte(); reader.byte();
+      for (let i = 0; i < len; i++) out.push(reader.byte());
+      continue;
+    }
+    let literals, distances;
+    if (type === 1) {
+      if (!fixedLiteralTree) {
+        const lengths = new Array(288);
+        for (let i = 0; i < 144; i++) lengths[i] = 8;
+        for (let i = 144; i < 256; i++) lengths[i] = 9;
+        for (let i = 256; i < 280; i++) lengths[i] = 7;
+        for (let i = 280; i < 288; i++) lengths[i] = 8;
+        fixedLiteralTree = huffmanTable(lengths);
+        fixedDistanceTree = huffmanTable(new Array(30).fill(5));
+      }
+      literals = fixedLiteralTree;
+      distances = fixedDistanceTree;
+    } else if (type === 2) {
+      const litCount = reader.bits(5) + 257;
+      const distCount = reader.bits(5) + 1;
+      const clCount = reader.bits(4) + 4;
+      const clLengths = new Array(19).fill(0);
+      for (let i = 0; i < clCount; i++) clLengths[CODE_LEN_ORDER[i]] = reader.bits(3);
+      const clTree = huffmanTable(clLengths);
+      const lengths = [];
+      while (lengths.length < litCount + distCount) {
+        const symbol = reader.symbol(clTree);
+        if (symbol < 16) lengths.push(symbol);
+        else if (symbol === 16) {
+          if (!lengths.length) throw new Error("deflate: repeat with nothing to repeat");
+          const prev = lengths[lengths.length - 1];
+          for (let n = 3 + reader.bits(2); n > 0; n--) lengths.push(prev);
+        } else if (symbol === 17) {
+          for (let n = 3 + reader.bits(3); n > 0; n--) lengths.push(0);
+        } else {
+          for (let n = 11 + reader.bits(7); n > 0; n--) lengths.push(0);
+        }
+      }
+      literals = huffmanTable(lengths.slice(0, litCount));
+      distances = huffmanTable(lengths.slice(litCount));
+    } else {
+      throw new Error("deflate: reserved block type");
+    }
+    for (;;) {
+      const symbol = reader.symbol(literals);
+      if (symbol === 256) break;
+      if (symbol < 256) { out.push(symbol); continue; }
+      const li = symbol - 257;
+      if (li >= LEN_BASE.length) throw new Error("deflate: length code out of range");
+      const len = LEN_BASE[li] + reader.bits(LEN_EXTRA[li]);
+      const di = reader.symbol(distances);
+      if (di >= DIST_BASE.length) throw new Error("deflate: distance code out of range");
+      const dist = DIST_BASE[di] + reader.bits(DIST_EXTRA[di]);
+      if (dist > out.length) throw new Error("deflate: distance reaches before the start");
+      const from = out.length - dist;
+      // Deliberately one byte at a time: a match may overlap its own output,
+      // which is how deflate encodes a run, so this cannot be a slice-and-append.
+      for (let i = 0; i < len; i++) out.push(out[from + i]);
+    }
+  } while (!final);
+  return Uint8Array.from(out);
+}
+
+// btoa takes a string of code points 0-255, so the bytes go through
+// String.fromCharCode — in CHUNKS, because spreading a whole payload into an
+// argument list overflows the stack somewhere around a hundred thousand bytes.
+function bytesToB64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return btoa(binary).replace(/=/g, "");
+}
+
+function b64ToBytes(text) {
+  let padded = text;
+  const pad = padded.length % 4;
+  if (pad === 2) padded += "==";
+  else if (pad === 3) padded += "=";
+  else if (pad === 1) throw new Error("deflate: truncated base64");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// The two functions the code format actually calls. The alphabet is standard
+// base64 — A-Za-z0-9+/ — which deliberately contains no '-', so a packed payload
+// can never be mistaken for a segment boundary in a '-' joined code.
+export function packPayload(text) {
+  return bytesToB64(deflateRaw(new TextEncoder().encode(text)));
+}
+
+export function unpackPayload(text) {
+  return new TextDecoder().decode(inflateRaw(b64ToBytes(text)));
+}
+// ==== END SHARED CODEC ====
+
+// -------------------------------------------------------------
+// Character codes
+// -------------------------------------------------------------
+// A character code is a '-' joined list of segments. We only care about two:
+//
+//   CP  the full character object, which holds everything mutable
+//   SN  the computed snapshot the creator adds from v1.11 onward
+//
+// Every other segment is left untouched. That is what makes the round trip
+// lossless: we never need to understand a segment in order to preserve it.
+//
+// 1.3. Two formats exist and both are read, forever. DM1 encodes each payload as
+// btoa(encodeURIComponent(json)); DM2 deflates it first. The frame is the same in
+// both, so the version byte decides only which unpacker runs — everything below
+// this line, including the search-from-the-end rule, is format independent.
+//
+// DM1 is never written again and never removed: codes sit in chat logs and on
+// tokens in rooms nobody has opened for months.
+export function unpackerFor(version) {
+  if (version === "DM2") return unpackPayload;
+  if (version === "DM1") return b64decode;
+  return null;
+}
+
+export function parseCode(code) {
+  const trimmed = (code || "").trim();
+  if (!trimmed) return { error: "Paste a character code first." };
+  const parts = trimmed.split("-");
+  const unpack = unpackerFor(parts[0]);
+  if (!unpack) {
+    // A code whose version byte we do not know is far more likely to be from a
+    // NEWER creator than to be junk, because Owlbear caches this background page
+    // for the whole room session — so the half-hour after a release is exactly
+    // when a current creator meets a stale extension. Say the thing that fixes it.
+    return /^DM\d/.test(parts[0])
+      ? { error: "That code is from a newer character creator than this extension can read. Reload the room." }
+      : { error: "That does not look like a Dreams & Machines code." };
+  }
+
+  // Searched from the END, and that is not a style preference (0.9.2).
+  //
+  // A code is a mix of two segment kinds. Most carry a two-letter TAG plus a payload
+  // — CP, SN, NM, GW — but segments 1 to 3 are bare lookup codes with no tag at all:
+  // the origin, the archetype and the temperament, written straight in as `EVR`,
+  // `SNT`, `CRC`.
+  //
+  // Sentinel's archetype code is **SNT**. Searching from the front, `startsWith("SN")`
+  // matched the archetype at index 2 rather than the snapshot at the end, so the
+  // parser tried to read one character of archetype code as the snapshot JSON, threw,
+  // and reported the whole code as damaged. Every Sentinel was therefore invisible to
+  // the party panel and to the roller's selected-character banner, while importing
+  // into the creator worked — the creator has its own parser and never looks for SN.
+  //
+  // Searching backwards fixes it for the same reason in every future case: the tagged
+  // segments are appended after the positional ones, so the last match is always the
+  // real one. A new archetype coded `CPX` would break the front search too, and cannot
+  // break this one.
+  const findLast = (prefix) => {
+    for (let i = parts.length - 1; i >= 0; i--) if (parts[i].startsWith(prefix)) return i;
+    return -1;
+  };
+  const cpIndex = findLast("CP");
+  const snIndex = findLast("SN");
+  if (cpIndex < 0) return { error: "This code has no character payload." };
+  if (snIndex < 0) {
+    return { error: "This code was made before Owlbear support was added. Re-export it from the character creator (version 1.11 or newer)." };
+  }
+
+  let char, snap;
+  try {
+    char = JSON.parse(unpack(parts[cpIndex].slice(2)));
+    snap = JSON.parse(unpack(parts[snIndex].slice(2)));
+  } catch (err) {
+    return { error: "That code is damaged and could not be read." };
+  }
+  return { parts, char, snap, cpIndex, snIndex };
+}
+
+// Rebuild a code with an edited character object, leaving all other segments
+// byte for byte identical to how the creator wrote them.
+//
+// The replacement CP is packed in the format the code ARRIVED in, read off its own
+// version byte. Writing a DM2 payload into a DM1 code would produce something that
+// parses without error and comes back as mojibake, which is the worst of the three
+// possible outcomes: no throw, no clue, and a character quietly replaced by noise.
+export function rebuildCode(parts, cpIndex, char) {
+  const pack = parts[0] === "DM2" ? packPayload : b64encode;
+  const next = parts.slice();
+  next[cpIndex] = "CP" + pack(JSON.stringify(char));
+  return next.join("-");
+}
+
+// -------------------------------------------------------------
+// Roll engine
+// -------------------------------------------------------------
+// Lifted from classifyDie() in the character creator, and confirmed against
+// the core rulebook: a die equal to or under the Attribute is a success, a die
+// equal to or under the Skill is a critical worth two successes, and a natural
+// 20 is a Complication. Order matters, 20 is never a success.
+// compAt defaults to 20 so every existing caller keeps the rulebook behaviour.
+// Order matters and has not changed: a die at or above the Complication threshold is a
+// Complication and can never also be a success, even when the threshold is low enough
+// to overlap the Attribute.
+export function classifyDie(value, attrValue, skillValue, compAt = COMP_AT_MAX) {
+  if (value >= compAt) return "complication";
+  if (value <= skillValue) return "crit";
+  if (value <= attrValue) return "success";
+  return "fail";
+}
+
+export function rollDice(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(1 + Math.floor(Math.random() * 20));
+  return out;
+}
+
+export function resolveRoll(dice, attrValue, skillValue, diff, compAt = COMP_AT_MAX) {
+  let successes = 0;
+  let complications = 0;
+  const detail = dice.map((d) => {
+    const kind = classifyDie(d, attrValue, skillValue, compAt);
+    if (kind === "crit") successes += 2;
+    else if (kind === "success") successes += 1;
+    else if (kind === "complication") complications += 1;
+    return { d, kind };
+  });
+  return {
+    detail, successes, complications,
+    passed: successes >= diff,
+    momentumGained: Math.max(0, successes - diff),
+  };
+}
+
+// Exhaustion shuts down an attribute: tests against it fail automatically.
+// The types themselves ride in the snapshot from creator v1.12 so this file
+// does not need a copy of the rules table.
+export function shutDownAttrs(snap, char) {
+  const active = Array.isArray(char?.activeExhaustion) ? char.activeExhaustion : [];
+  const types = snap?.exhaustionTypes || [];
+  return new Set(types.filter((t) => active.includes(t.key)).map((t) => t.attr));
+}
+
+export const clamp = (n, lo, hi) => (Number.isNaN(n) ? lo : Math.min(hi, Math.max(lo, n)));
+
+// Both openers — the roller's party list and the token context menu — go through this,
+// so the sheet cannot end up opened two different ways. Takes OBR as an argument rather
+// than importing it: this file is deliberately SDK-free so the test suites can load it
+// in plain node.
+export const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/beta/";
+
+export async function openSheetPopover(obr, itemId, storage) {
+  let viewport = null;
+  try {
+    const [width, height] = await Promise.all([
+      obr.viewport.getWidth(), obr.viewport.getHeight(),
+    ]);
+    viewport = { width, height };
+  } catch (err) {
+    // Before a scene is up this can throw or read zero. sheetPopover() falls back.
+    viewport = null;
+  }
+  const dock = storage ? readDock(storage) : clampDock(null);
+  const url = `${SHEET_URL}?item=${encodeURIComponent(itemId)}`;
+  await obr.popover.open(sheetPopover({ url, dock, viewport }));
+}
+
+// 1.5. The GM panel, popped out. Resolved against THIS file rather than a hardcoded
+// host so a staged copy under test opens its own page, not the live one.
+export function gmPanelUrl() {
+  return new URL(GM_PANEL_PATH, import.meta.url).href;
+}
+
+export async function openGmPopover(obr, storage) {
+  let viewport = null;
+  try {
+    const [width, height] = await Promise.all([
+      obr.viewport.getWidth(), obr.viewport.getHeight(),
+    ]);
+    viewport = { width, height };
+  } catch (err) {
+    viewport = null;
+  }
+  await obr.popover.open(gmPopover({ url: gmPanelUrl(), dock: readGmDock(storage), viewport }));
+}
+
+// -------------------------------------------------------------
+// Character recovery (1.3)
+// -------------------------------------------------------------
+// Everything a character is lives in one token's metadata. Delete the token and
+// the character is gone — no undo, no copy, and nothing anywhere else. A session's
+// growth, injuries, bonds and spent Momentum go with it. Owlbear's own undo does
+// not help, because by the time anyone notices it is several actions back.
+//
+// So the GM's client keeps a local buffer. When a token that was carrying a
+// character stops carrying one — deleted, or its character detached — the code is
+// stashed in localStorage on the GM's own machine. That is not durable storage and
+// is not pretending to be: it is per browser, it does not follow the GM to another
+// computer, and clearing site data clears it. It is a safety net under one specific
+// accident, which is the accident that actually happens.
+//
+// WHY THE ROOM'S METADATA IS NOT USED: Owlbear allows 16 kB of room metadata across
+// EVERY extension in the room, and the roll log already reserves 11,000 of it. One
+// DM2 character code is around 3.8 kB. Two recovered characters would not fit, and
+// overrunning that budget breaks metadata for unrelated extensions, not just ours.
+//
+// The rule the whole design turns on: a recovered character is only ever OFFERED
+// while no token holds it. The moment a token carries that character again the
+// entry disappears from the list. There is therefore never a moment where two
+// versions of one character are both on offer, and never a click that can put a
+// stale copy over a live one. That was the explicit requirement, and it is why
+// this filters at RENDER time against the live scene rather than trying to keep
+// the stored list pruned.
+
+export const RECOVERY_PREFIX = `${ID}/recovery`;
+export const MAX_RECOVERY_ENTRIES = 25;
+export const RECOVERY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// A stored code can be a DM1 one at around 10 kB. Twenty-five of those is 250 kB,
+// which localStorage takes without complaint, but a cap means a pathological code
+// cannot quietly fill a player's browser storage either.
+export const MAX_RECOVERY_BYTES = 400000;
+
+// Keyed per room, because the same browser GMs several tables and a character
+// recovered into the wrong room is worse than one not offered at all.
+export function recoveryKeyFor(roomId) {
+  return `${RECOVERY_PREFIX}/${String(roomId || "unknown")}`;
+}
+
+// The tokens in a scene that carry a character, as {id, code}. Deliberately does
+// not parse: this runs on every scene change, including every frame of a drag.
+export function characterTokens(items) {
+  const out = [];
+  for (const item of items || []) {
+    const code = item && item.metadata && item.metadata[CHAR_KEY] && item.metadata[CHAR_KEY].code;
+    if (typeof code === "string" && code) out.push({ id: item.id, code });
+  }
+  return out;
+}
+
+// The diff. `before` and `after` are both characterTokens() results.
+//
+// Three cases have to be told apart and only one of them is a loss:
+//
+//   the token id is still there          an ordinary edit — every save rewrites
+//                                        the code, so comparing codes would
+//                                        report a loss on every keystroke
+//   the id is gone, the code is elsewhere a character moved to another token
+//   the id is gone and so is the code     the loss this exists for
+//
+// A scene SWITCH empties the item list too, which would read as the whole party
+// being deleted at once. That is not handled here — the caller re-seeds its
+// baseline on scene ready without diffing, because only the caller knows why the
+// list emptied. Keeping that decision out of this function is what lets it be
+// tested without a room.
+export function noteVanished(list, before, after, now) {
+  const stamp = typeof now === "number" ? now : Date.now();
+  const liveIds = new Set((after || []).map((t) => t.id));
+  const liveCodes = new Set((after || []).map((t) => t.code));
+  let next = Array.isArray(list) ? list.slice() : [];
+  for (const was of before || []) {
+    if (!was || typeof was.code !== "string" || !was.code) continue;
+    if (liveIds.has(was.id)) continue;
+    if (liveCodes.has(was.code)) continue;
+    next = next.filter((entry) => entry.code !== was.code);
+    next.unshift({ code: was.code, tokenId: was.id, at: stamp });
+  }
+  return trimRecovery(next, stamp);
+}
+
+export function trimRecovery(list, now) {
+  const stamp = typeof now === "number" ? now : Date.now();
+  let next = (Array.isArray(list) ? list : [])
+    .filter((entry) => entry && typeof entry.code === "string" && entry.code)
+    .filter((entry) => {
+      const at = Number(entry.at);
+      return Number.isFinite(at) && stamp - at < RECOVERY_TTL_MS;
+    })
+    .map((entry) => ({ code: entry.code, tokenId: String(entry.tokenId || ""), at: Number(entry.at) }))
+    .slice(0, MAX_RECOVERY_ENTRIES);
+  while (next.length > 1 && JSON.stringify(next).length > MAX_RECOVERY_BYTES) next.pop();
+  return next;
+}
+
+// Storage is untrusted on the way OUT, the same rule the dock preference follows:
+// it is same-origin, but a browser extension, another tab or a previous version of
+// this file could have left anything there, and it is read straight into a render.
+export function readRecovery(storage, roomId, now) {
+  if (!storage) return [];
+  try {
+    return trimRecovery(JSON.parse(storage.getItem(recoveryKeyFor(roomId)) || "[]"), now);
+  } catch (err) {
+    return [];
+  }
+}
+
+export function writeRecovery(storage, roomId, list, now) {
+  const trimmed = trimRecovery(list, now);
+  if (!storage) return trimmed;
+  try {
+    storage.setItem(recoveryKeyFor(roomId), JSON.stringify(trimmed));
+  } catch (err) {
+    // Quota, or a frame whose cookies are blocked. Losing the buffer is not worth
+    // taking down the scene-change handler it is called from.
+    console.warn("[dnm] could not save the recovery buffer", err);
+  }
+  return trimmed;
+}
+
+// What the list should SHOW, given what is live right now. An entry is hidden when
+// a token in the scene already holds that character — matched on the name, through
+// the same bondNameKey() the roll merge uses, because a restored character will
+// have a different token id and a different code from the one that was lost.
+//
+// A character with no name cannot be matched that way, so it is matched on its
+// token id instead. That only hides it if the very token that vanished comes back,
+// which is nearly never — an unnamed character therefore lingers in the list. That
+// is the safe direction: the cost is a stale row the GM dismisses, and the cost of
+// guessing the other way is a character silently not offered.
+export function visibleRecovery(list, items, resolveName) {
+  const liveNames = new Set();
+  const liveIds = new Set();
+  for (const token of characterTokens(items)) {
+    liveIds.add(token.id);
+    const name = bondNameKey(resolveName ? resolveName(token.code) : "");
+    if (name) liveNames.add(name);
+  }
+  return (list || []).filter((entry) => {
+    const name = bondNameKey(resolveName ? resolveName(entry.code) : "");
+    if (name) return !liveNames.has(name);
+    return !liveIds.has(entry.tokenId);
+  });
+}

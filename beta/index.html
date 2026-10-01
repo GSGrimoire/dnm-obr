@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>D&amp;M Rolls and Actions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Exo+2:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- 0.9.10. Reported from play: in a room with no GM, a player presses + on Momentum,
+       the sheet moves and the pool never does. That is the design working — only the
+       GM's background page writes room metadata, so with no GM nobody writes anything
+       and every pool change is dropped. The single-writer rule is what stops two
+       clients clobbering each other and is worth keeping; what was wrong is that it
+       failed SILENTLY, so the tools looked broken rather than unattended. -->
+  <p id="no-gm" class="no-gm" hidden>No GM in this room. Rolls still show, but Momentum,
+    Threat and the shared log will not save until a GM joins.</p>
+
+  <section class="pools">
+    <div class="pool">
+      <span class="pool-label">Momentum</span>
+      <div class="pool-controls">
+        <button class="step" data-pool="momentum" data-delta="-1" aria-label="Spend momentum">&minus;</button>
+        <span class="pool-value" id="momentum-value">0</span>
+        <button class="step" data-pool="momentum" data-delta="1" aria-label="Gain momentum">+</button>
+      </div>
+    </div>
+    <div class="pool threat">
+      <span class="pool-label">Threat</span>
+      <div class="pool-controls">
+        <button class="step" data-pool="threat" data-delta="-1" aria-label="Spend threat">&minus;</button>
+        <span class="pool-value" id="threat-value">0</span>
+        <button class="step" data-pool="threat" data-delta="1" aria-label="Add threat">+</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- GM only. Hidden entirely for players by roller.js, not merely disabled: these
+       push a boundary to every character at the table, and it should not look like
+       something a player might be allowed to press. -->
+  <section id="gm-panel" class="gm-panel" hidden>
+    <div class="gm-panel-head">
+      <h2>Table Controls</h2>
+      <!-- 1.5. Lit while the GM has rushed the table: the three rests below are greyed
+           until the next End Scene. -->
+      <span id="rushed-badge" class="rushed-badge" hidden
+        title="No rest before the next scene (GM Guide p.101). Lift it in GM Tools.">Rushed</span>
+      <span class="gm-badge">GM</span>
+    </div>
+    <div class="gm-group">
+      <span class="gm-group-label">Rest</span>
+      <div class="gm-buttons">
+        <button class="gm-btn" data-epoch="breather">Breather</button>
+        <button class="gm-btn" data-epoch="break">Break</button>
+        <button class="gm-btn" data-epoch="bed">Bed</button>
+      </div>
+    </div>
+    <!-- 0.9.5. The Complication threshold for the whole room. The rulebook says a
+         natural 20 complicates; lowering this makes a scene harder for everyone at
+         once, which is the GM's lever and nobody else's. Threat-coloured because it
+         raises the danger, the same thing Threat measures. -->
+    <div class="gm-group">
+      <span class="gm-group-label">Complication Level</span>
+      <div class="gm-buttons" id="comp-at-seg">
+        <button class="gm-btn danger" data-comp="20">20</button>
+        <button class="gm-btn danger" data-comp="19">19</button>
+        <button class="gm-btn danger" data-comp="18">18</button>
+        <button class="gm-btn danger" data-comp="17">17</button>
+        <button class="gm-btn danger" data-comp="16">16</button>
+        <button class="gm-btn danger" data-comp="15">15</button>
+      </div>
+    </div>
+    <div class="gm-group">
+      <span class="gm-group-label">Initiative</span>
+      <div class="gm-buttons">
+        <button class="gm-btn" id="init-start">Start Initiative</button>
+      </div>
+    </div>
+    <div class="gm-group">
+      <span class="gm-group-label">Boundary</span>
+      <div class="gm-buttons">
+        <button class="gm-btn" data-epoch="scene">End Scene</button>
+        <button class="gm-btn" data-epoch="session">New Session</button>
+        <button class="gm-btn" data-epoch="adventure">New Adventure</button>
+      </div>
+    </div>
+    <p class="gm-note">Applies to every attached character. A sheet that is closed
+      catches up the next time it is opened.</p>
+  </section>
+
+  <!-- 1.5. GM Tools: every way the GM gains and spends Threat, round tickers, hazards,
+       starting Threat and the NPC roster. Drawn by gmpanel.js, which draws the same
+       panel in its own docked popover (gm.html) when popped out. GM only. -->
+  <section id="gm-tools" class="gm-panel gm-tools" hidden></section>
+
+  <!-- 0.9.0, shared with the table from 1.4, and the initiative tracker folded into
+       it in 1.4B. It was a separate panel for one release and printed the same four
+       names the party list was already printing, with a different set of buttons
+       beside them. One list, one row per combatant. -->
+  <section id="party-panel" class="party-panel" hidden>
+    <div class="gm-panel-head">
+      <h2>Party</h2>
+      <span class="gm-badge">GM</span>
+      <span id="init-round" class="init-round" hidden></span>
+      <button type="button" id="init-next" class="gm-btn init-next" hidden>Next Round</button>
+      <button type="button" id="init-end" class="ghost" hidden>End</button>
+      <button type="button" id="party-share" class="ghost party-share"
+        title="Whether the players can see this panel">Shared</button>
+      <button type="button" id="party-backup" class="ghost party-backup"
+        title="Every character in this scene, as codes you can keep">Back up</button>
+    </div>
+    <ol id="party-list" class="party-list"></ol>
+    <!-- GM only, and only while a round is running. Auto-grows the way the sheet's
+         Injuries and Truths do: type a name, press enter, a fresh blank appears. -->
+    <div id="init-add-row" class="init-add" hidden>
+      <input type="text" id="init-add" class="init-add-input" placeholder="Add an adversary…"
+        maxlength="32" spellcheck="false" autocomplete="off">
+    </div>
+    <p class="gm-note" id="party-note">A character catches up when its sheet is next
+      opened. Not synced means the character has never met this room and has nothing
+      to catch up on.</p>
+
+    <!-- 1.3. Filled by renderBackup(). A textarea rather than a straight download
+         because an extension runs in an iframe Owlbear owns, and whether a
+         programmatic download is permitted there is Owlbear's decision, not ours.
+         Select-and-copy always works; the download button is the convenience. -->
+    <div id="backup" class="backup" hidden>
+      <div class="backup-head">
+        <span id="backup-summary" class="backup-summary"></span>
+        <button type="button" id="backup-copy" class="ghost">Copy</button>
+        <button type="button" id="backup-download" class="ghost">Download</button>
+        <button type="button" id="backup-close" class="ghost">Close</button>
+      </div>
+      <textarea id="backup-text" class="backup-text" readonly rows="6"
+        spellcheck="false"></textarea>
+      <p class="gm-note">Keep this somewhere outside Owlbear. Any one of these codes
+        pastes back in through Attach D&amp;M character on a token.</p>
+    </div>
+
+    <!-- 1.3. Characters whose token has left the scene. Only ever shown while NO
+         token holds that character, so there is never a choice between two copies
+         and never a click that can put a stale one over a live one. -->
+    <div id="recovery" class="recovery" hidden>
+      <div class="recovery-head">
+        <h3>Lost characters</h3>
+        <span id="recovery-count" class="recovery-count"></span>
+      </div>
+      <ol id="recovery-list" class="recovery-list"></ol>
+      <p class="gm-note">These were on tokens that are no longer in this scene. Saved
+        in this browser only, for 30 days. A character disappears from this list as
+        soon as a token is carrying it again.</p>
+    </div>
+  </section>
+
+  <section class="roller">
+    <div id="char-banner" class="char-banner" hidden></div>
+    <div class="grid-2">
+      <label>Character
+        <input type="text" id="char-name" placeholder="Name" maxlength="24">
+      </label>
+      <label>Testing
+        <input type="text" id="roll-label" placeholder="optional" maxlength="40">
+      </label>
+    </div>
+
+    <div class="stat-row">
+      <label class="stat-pick">Attribute
+        <select id="attr-key">
+          <option value="might">Might</option>
+          <option value="quickness">Quickness</option>
+          <option value="insight">Insight</option>
+          <option value="resolve">Resolve</option>
+        </select>
+      </label>
+      <label class="stat-val">Value
+        <input type="number" id="attr-val" min="0" max="20" value="9">
+      </label>
+    </div>
+
+    <div class="stat-row">
+      <label class="stat-pick">Skill
+        <select id="skill-key">
+          <option value="fight">Fight</option>
+          <option value="move">Move</option>
+          <option value="operate">Operate</option>
+          <option value="sneak">Sneak</option>
+          <option value="study">Study</option>
+          <option value="survive">Survive</option>
+          <option value="talk">Talk</option>
+        </select>
+      </label>
+      <label class="stat-val">Value
+        <input type="number" id="skill-val" min="0" max="20" value="2">
+      </label>
+    </div>
+
+    <p class="rule-hint" id="rule-hint"></p>
+
+    <div class="grid-2">
+      <label>d20s
+        <div class="segmented" id="dice-seg">
+          <button data-dice="1">1</button>
+          <button data-dice="2" class="on">2</button>
+          <button data-dice="3">3</button>
+          <button data-dice="4">4</button>
+          <button data-dice="5">5</button>
+        </div>
+      </label>
+      <label>Difficulty
+        <div class="segmented" id="diff-seg">
+          <button data-diff="0">0</button>
+          <button data-diff="1" class="on">1</button>
+          <button data-diff="2">2</button>
+          <button data-diff="3">3</button>
+          <button data-diff="4">4</button>
+          <button data-diff="5">5</button>
+        </div>
+      </label>
+    </div>
+
+    <!-- 0.9.3. Three modes, replacing the GM-only Hidden checkbox.
+         OPEN   — the table sees the roll and the result.
+         HIDDEN — the table sees THAT you rolled, and nothing else. Anyone may use
+                  it: a player concealing a result is ordinary play, and the table
+                  still knows a roll happened.
+         SECRET — nothing is sent at all, so no one can tell a roll occurred. GM
+                  only, deliberately: a player rolling with no trace is the one
+                  thing a shared log exists to prevent. -->
+    <div class="roll-row">
+      <div class="conceal" id="conceal-wrap">
+        <div class="segmented" id="conceal-seg">
+          <button data-conceal="open" class="on">Open</button>
+          <button data-conceal="hidden">Hidden</button>
+          <button data-conceal="secret" id="conceal-secret" hidden>Secret</button>
+        </div>
+      </div>
+      <button id="roll-btn" class="primary">Roll</button>
+    </div>
+    <p class="conceal-hint" id="conceal-hint"></p>
+  </section>
+
+  <section class="log-section">
+    <div class="log-header">
+      <h2>Rolls and Actions</h2>
+      <div class="log-header-actions">
+        <button id="clear-log" class="ghost" hidden>Clear</button>
+      </div>
+    </div>
+    <ol id="log" class="log"></ol>
+  </section>
+
+  <p id="status" class="status"></p>
+
+  <!-- 0.9.3. Owlbear sizes the popover from the manifest and gives the viewer no
+       edge to grab, so this IS the bottom edge: drag it and the panel follows.
+       0.9.2 put +/- buttons in the log header instead, which was not what anyone
+       means by resizable and was below the fold on a tall panel besides. The
+       buttons survive here as the keyboard-reachable path, beside the grip. -->
+  <div id="resizer" class="resizer" title="Drag to resize the panel">
+    <button id="shorter" class="ghost icon-btn" aria-label="Make the panel shorter">&minus;</button>
+    <div class="resizer-grip" role="separator" aria-label="Drag to resize the panel">
+      <span></span><span></span><span></span>
+    </div>
+    <span id="height-value" class="height-value">900</span>
+    <button id="taller" class="ghost icon-btn" aria-label="Make the panel taller">+</button>
+  </div>
+</div>
+
+<script type="module" src="roller.js"></script>
+</body>
+</html>
