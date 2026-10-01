@@ -3,7 +3,7 @@
   "version": "1.5",
   "manifest_version": 1,
   "author": "GS Grimoire",
-  "description": "Dreams and Machines character sheet, dice roller, shared Rolls and Actions log, GM table and party controls, and GM tools with an NPC roster",
+  "description": "Dreams and Machines sheet, dice roller, shared log, GM table and party controls, and GM tools with NPC roster",
   "icon": "https://gsgrimoire.github.io/dnm-obr/icon.svg",
   "background_url": "https://gsgrimoire.github.io/dnm-obr/background.html",
   "permissions": [
