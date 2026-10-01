@@ -683,3 +683,204 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
 
 /* The GM's switch for whether the table can see the party panel. */
 .party-share.is-on { color: var(--teal); }
+
+/* -------------------------------------------------------------
+   GM Tools (1.5)
+   -------------------------------------------------------------
+   The same framing as Table Controls — GM furniture — with sections that fold, because
+   the whole of Chapter 4 does not fit open at once beside a roller. Gains are drawn in
+   teal and spends in Threat's orange, so the two halves read apart at a glance. */
+.gm-tools { padding: 9px 10px; }
+.gm-tools.is-popped .gm-panel-head { margin-bottom: 0; }
+.gmt-head { flex-wrap: wrap; }
+.gmt-threat { display: inline-flex; align-items: baseline; gap: 5px; }
+.gmt-threat-label { font-family: var(--font-mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+.gmt-threat-value { font-family: var(--font-mono); font-size: 16px; color: var(--text-bright); }
+
+.gm-sec { border-top: 1px solid var(--border); padding: 4px 0; }
+.gm-sec-head {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  font-family: var(--font-display); font-size: 11px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--teal); padding: 3px 0;
+}
+.gm-sec-head::-webkit-details-marker { display: none; }
+.gm-sec-head::before { content: "\25B8"; font-size: 9px; color: var(--text-dim); }
+.gm-sec[open] > .gm-sec-head::before { content: "\25BE"; }
+.gm-sec-body { padding: 4px 0 6px; display: flex; flex-direction: column; gap: 6px; }
+
+.gm-info {
+  font-family: var(--font-mono); font-size: 9px; line-height: 1; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 50%; width: 14px; height: 14px;
+  display: inline-grid; place-items: center; cursor: help;
+}
+
+/* The grid of rule buttons. Each cell is a button plus whatever it needs (a stepper, a
+   cost readout), and wraps rather than squeezing: a zero-width flex child spills over its
+   neighbours, which is the fault layout.test.mjs watches for. */
+.gmt-grid { display: flex; flex-direction: column; gap: 4px; }
+.gmt-cell, .gmt-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gmt-wrap { flex-wrap: wrap; }
+.gmt-cell .gm-btn { flex: 0 1 auto; text-align: left; }
+.gm-btn.gmt-gain { color: var(--teal); border-color: var(--teal-dim); }
+.gm-btn.gmt-spend { color: var(--accent); border-color: rgba(255, 107, 53, 0.45); }
+.gm-btn.gmt-wide { width: 100%; text-align: left; white-space: normal; }
+.gm-btn.armed { border-color: var(--accent); color: var(--accent); background: rgba(255, 107, 53, 0.12); }
+.gmt-cost { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+.gmt-mini { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; }
+.gmt-subhead {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-dim); margin-top: 6px; cursor: help;
+}
+.gmt-actions { display: flex; flex-direction: column; gap: 4px; }
+
+.gm-stepper { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.gm-stepper-val { font-family: var(--font-mono); font-size: 12px; min-width: 18px; text-align: center; color: var(--text-bright); }
+.gm-step { font-size: 12px; padding: 1px 6px; letter-spacing: 0; }
+
+.gmt-check {
+  flex-direction: row; align-items: center; gap: 4px; text-transform: none;
+  letter-spacing: 0; font-family: var(--font-body); font-size: 11px; color: var(--text);
+  font-weight: 500; cursor: pointer;
+}
+.gmt-check input { width: auto; accent-color: var(--teal); }
+
+.gmt-banners:empty { display: none; }
+.gmt-banner {
+  display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  font-size: 11px; padding: 6px 8px; border-radius: 3px; margin: 4px 0;
+}
+.gmt-banner.is-rushed { color: var(--warning); border: 1px solid var(--warning); background: rgba(255, 209, 102, 0.1); }
+.rushed-badge {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--warning); border: 1px solid var(--warning); padding: 1px 5px; cursor: help;
+}
+
+/* Tickers */
+.gmt-ticker { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.gmt-ticker.is-off { opacity: .55; }
+.gmt-ticker input[type="checkbox"] { width: auto; accent-color: var(--teal); }
+.gmt-ticker-name { flex: 1 1 10ch; min-width: 10ch; padding: 3px 5px; font-size: 12px; }
+.gmt-eye.is-on, .gmt-pin.is-on { color: var(--teal); }
+.gmt-preset { flex: 1 1 12ch; min-width: 12ch; padding: 4px 5px; font-size: 12px; }
+.gmt-total { font-family: var(--font-mono); font-size: 10px; color: var(--accent); margin-right: auto; }
+
+/* Hazard builder */
+.gmt-hazard { display: flex; flex-direction: column; gap: 6px; }
+.gmt-hazard-name { padding: 4px 6px; font-size: 12px; }
+.gmt-hazard-result { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.gmt-avoid button, .gmt-stakes button { font-family: var(--font-display); font-size: 11px; padding: 4px 2px; }
+
+/* NPCs */
+.gmt-filter { flex: 1 1 10ch; min-width: 10ch; padding: 4px 6px; font-size: 12px; }
+.gmt-npc-wrap { border-top: 1px solid var(--border); padding: 5px 0; }
+.gmt-npc { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gmt-npc-name, .gmt-fighter-name {
+  background: none; border: none; padding: 0; text-align: left; cursor: pointer;
+  font-family: var(--font-display); font-size: 13px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent); flex: 1 1 9ch; min-width: 9ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gmt-npc-name:hover, .gmt-fighter-name:hover { text-decoration: underline; color: var(--text-bright); }
+.gmt-npc-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.gmt-npc-actions .ghost { padding: 2px 4px; }
+.gmt-tag {
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 2px; padding: 0 4px; flex: none;
+}
+.gmt-tag.is-threat { color: var(--accent); border-color: rgba(255, 107, 53, 0.45); }
+.gmt-tag.is-sample { color: var(--warning); border-color: rgba(255, 209, 102, 0.5); }
+.gmt-sample-note { color: var(--warning); }
+.gmt-fighter { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 4px 0; border-top: 1px solid var(--border); }
+.gmt-fighter.is-hidden .gmt-fighter-name { opacity: .8; }
+.gmt-fighter .gm-btn { padding: 2px 6px; }
+.gmt-pt { font-family: var(--font-mono); font-size: 10px; color: var(--warning); cursor: help; }
+
+.gmt-statblock {
+  border-left: 2px solid var(--accent); padding: 4px 0 4px 8px; margin: 2px 0 6px;
+  font-size: 11px; line-height: 1.45; display: flex; flex-direction: column; gap: 2px;
+}
+.gmt-sb-line { font-family: var(--font-mono); font-size: 10px; color: var(--text-bright); }
+.gmt-sb-facts { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+.gmt-sb-item b { color: var(--text-bright); font-weight: 600; }
+.gmt-sb-notes { font-style: italic; color: var(--text-dim); }
+.gmt-sb-source { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); }
+
+.gmt-editor { display: flex; flex-direction: column; gap: 6px; }
+.gmt-field { flex: 1 1 8ch; min-width: 8ch; }
+.gmt-field input, .gmt-field textarea { padding: 4px 6px; font-size: 12px; }
+.gmt-editor .gmt-row .gmt-field { flex: 1 1 7ch; }
+
+.gmt-log { max-height: clamp(120px, 26vh, 420px); }
+.gmt-ref-item summary { cursor: pointer; font-size: 12px; color: var(--text); padding: 2px 0; }
+.gmt-ref-quote { font-size: 11px; line-height: 1.5; color: var(--text); margin: 3px 0; font-style: italic; }
+.gmt-tip-cite { font-family: var(--font-mono); font-size: 9px; color: var(--teal); }
+
+/* The one floating tooltip. Fixed, so it can leave the section it belongs to, and
+   clamped to the viewport in showTip(). */
+.gm-tip {
+  position: fixed; z-index: 200; pointer-events: none;
+  background: var(--bg4); border: 1px solid var(--border-bright); border-radius: 4px;
+  padding: 8px 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .55);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.gm-tip[hidden] { display: none; }
+.gm-tip-title { font-family: var(--font-display); font-size: 12px; font-weight: 700; color: var(--text-bright); letter-spacing: .04em; }
+.gm-tip-quote { font-size: 11px; line-height: 1.5; color: var(--text); font-style: italic; }
+.gm-tip-cite { font-family: var(--font-mono); font-size: 9px; color: var(--teal); letter-spacing: .08em; }
+.gm-tip-note { font-size: 11px; line-height: 1.45; color: var(--warning); }
+
+/* The GM's private log lines in the roller's feed. */
+.entry.is-gm { border-left-color: var(--warning); background: rgba(255, 209, 102, 0.035); }
+.entry-hidden-tag.is-gm { color: var(--warning); border-color: rgba(255, 209, 102, 0.5); background: rgba(255, 209, 102, 0.08); }
+
+/* Rolling for an NPC: the Truth / Default choice in the banner. */
+.npc-mode { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.npc-mode-btn { padding: 1px 5px; font-size: 9px; text-transform: none; letter-spacing: 0; color: var(--text-dim); border: 1px solid var(--border); }
+.npc-mode-btn.on { color: var(--bg); background: var(--teal); border-color: var(--teal); }
+.char-banner { flex-wrap: wrap; }
+
+/* The popped-out page: the dock bar, and the sheet's pad, zoom and resize handles. These
+   mirror the creator's .obr-* rules so the two docked panels look like one product. */
+.gm-popover-page { padding: 0; }
+.gm-popover-page #app { padding: 0 10px 10px; }
+.gm-bar {
+  position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; margin-bottom: 8px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.gm-close { margin-left: auto; }
+.obr-dock { display: flex; align-items: center; gap: 8px; }
+.obr-pad {
+  display: grid; grid-template-columns: repeat(3, 10px); grid-template-rows: repeat(3, 8px);
+  gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 3px; flex: none;
+}
+.obr-pad-cell { padding: 0; border: none; border-radius: 1px; background: var(--border); cursor: pointer; }
+.obr-pad-cell:hover:not(:disabled) { background: var(--teal); }
+.obr-pad-cell[aria-pressed="true"] { background: var(--teal); cursor: default; opacity: 1; }
+.obr-zoomgroup { display: flex; align-items: stretch; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; flex: none; }
+.obr-zoom-readout {
+  display: flex; align-items: center; padding: 0 6px; font-family: var(--font-mono);
+  font-size: 10px; color: var(--text-dim); min-width: 42px; justify-content: center;
+}
+.obr-dock-btn { font-size: 10px; padding: 4px 8px; border: none; border-radius: 0; background: transparent; color: var(--text-dim); }
+.obr-dock-btn:hover { background: var(--teal-dim); color: var(--text-bright); }
+.obr-resize { position: fixed; z-index: 90; touch-action: none; }
+.obr-resize-w { top: 0; bottom: 0; left: 0; width: 7px; cursor: ew-resize; }
+.obr-resize-e { top: 0; bottom: 0; right: 0; width: 7px; cursor: ew-resize; }
+.obr-resize-n { left: 0; right: 0; top: 0; height: 7px; cursor: ns-resize; }
+.obr-resize-s { left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
+.obr-resize-nw, .obr-resize-ne, .obr-resize-sw, .obr-resize-se { width: 14px; height: 14px; z-index: 91; }
+.obr-resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.obr-resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.obr-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.obr-resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
+body.obr-resizing { user-select: none; }
+body.obr-resizing .obr-resize { background: var(--teal-dim); }
+
+/* 1.5. Next Round now carries the round's Threat ("Next Round (+3)"), which pushed the
+   party header's last button past a 420px panel. The header wraps instead. */
+.gm-panel-head { flex-wrap: wrap; }
+
+/* 1.5. A display rule beats the UA's [hidden], so the empty character banner was drawn
+   as a bare teal bar above the roller whenever nothing was selected — since the banner
+   was introduced. Found while screenshotting the GM tools. */
+.char-banner[hidden] { display: none; }

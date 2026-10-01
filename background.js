@@ -17,7 +17,7 @@
 // =============================================================
 
 import OBR from "./sdk.js";
-import { ID, CHAR_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
+import { ID, CHAR_KEY, NPC_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
   openSheetPopover, characterTokens, noteVanished, readRecovery, writeRecovery } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
@@ -45,6 +45,9 @@ function setupContextMenu() {
           every: [
             { key: "layer", value: "CHARACTER" },
             { key: ["metadata", CHAR_KEY], value: undefined },
+            // 1.5. A token already standing in for an NPC from the GM's roster is not
+            // an empty token. Detach the NPC in GM Tools first.
+            { key: ["metadata", NPC_KEY], value: undefined },
           ],
           max: 1,
         },

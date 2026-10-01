@@ -31,7 +31,13 @@ import {
   ID, mayMarkRow, initRowLabel, initRowIdForCharacter,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
+  readRushed, NPC_KEY, openGmPopover, GM_POPOVER_ID,
 } from "./dnm.js";
+import {
+  mountGmPanel, pushEpochVia, startInitiativeVia, tickRound, spendSideEffects,
+  readGmLog, readTickers, isPoppedOut, markPopped, findNpc, GM_KEYS, endFight,
+} from "./gmpanel.js";
+import { tickerTotal, npcRollValues, readNpcTokenRef } from "./gmrules.js";
 
 const MAX_LOG_ENTRIES = 40;
 
@@ -50,6 +56,30 @@ let difficulty = 1;
 // has no idea who you are on its own, so selection is what tells it. Read
 // only here: the sheet owns edits to the character.
 let activeChar = null;
+
+// 1.5. An NPC on the selected token, GM only. The token carries an opaque roster id and
+// the stat block comes from this browser's roster, so a player selecting the same token
+// gets nothing — there is nothing on it to read. `mode` picks a Normal NPC's pair.
+let activeNpc = null;
+
+// 1.5. The GM tools, drawn below Table Controls (or popped out into their own panel).
+let gmTools = null;
+
+// What gmpanel.js needs from wherever it is mounted. The pop-out builds the same shape
+// from the SDK in gm.js; this one routes through the roller's own announce(), so a GM
+// tools press flushes a run of pool nudges first, exactly like any other event.
+const gmHost = {
+  state: () => state,
+  room: () => { try { return OBR.room.id; } catch (err) { return "unknown"; } },
+  playerName: () => playerName,
+  announce: (ev) => announce(ev),
+  items: () => OBR.scene.items.getItems(),
+  itemsById: (ids) => OBR.scene.items.getItems(ids),
+  selection: () => OBR.player.getSelection(),
+  updateItems: (ids, fn) => OBR.scene.items.updateItems(ids, fn),
+  status: (msg) => setStatus(msg),
+  changed: () => { render(); if (gmTools) gmTools.refresh(); },
+};
 
 // The roll engine, the attribute and skill names, and the room metadata key
 // all live in dnm.js so the sheet and the roller can never disagree about what
@@ -248,24 +278,18 @@ const poolBatch = createPoolBatcher(async ({ pool, delta, label }) => {
 // Maverick, exactly as a rivalry bond has every sheet decide whether it holds the bond.
 // Role-checked here to stop an honest misclick, and GM-only in the reducer where it
 // actually counts.
+//
+// 1.5: the announcing moved to spendSideEffects() in gmpanel.js, which the GM tools use
+// too, and gained adversity Growth (GM Guide p.125) alongside the drive. One function, so
+// the − button here and a spend in the GM tools cannot set off different things.
 async function announceThreatSpendDrive(pool, delta) {
   if (pool !== "threat" || role !== "GM") return;
   if (delta > -DRIVE_THREAT_SPEND_MIN) return;
   const spent = Math.abs(delta);
-  await announce({
-    type: "bond",
-    effect: {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      t: Date.now(),
-      kind: "drive",
-      drive: "maverick",
-      from: playerName,
-      amount: spent,
-    },
-  });
+  const said = await spendSideEffects(gmHost, spent);
   // The GM gets told too. A drive that fires silently on somebody else's sheet is
   // exactly the thing the log exists to prevent.
-  setStatus(`Spent ${spent} Threat at once — every Maverick regains 1 Spirit.`);
+  setStatus(`Spent ${spent} Threat at once — ${said.join(", ")}.`);
 }
 
 function stepPool(pool, delta) {
@@ -392,6 +416,7 @@ async function clearLog() {
 // -------------------------------------------------------------
 async function refreshSelection() {
   let next = null;
+  let npc = null;
   try {
     const sel = await OBR.player.getSelection();
     if (sel && sel.length) {
@@ -401,18 +426,38 @@ async function refreshSelection() {
         const r = parseCode(withChar.metadata[CHAR_KEY].code);
         if (!r.error) next = { itemId: withChar.id, snap: r.snap, char: r.char };
       }
+      // 1.5. GM only, and only when no character is selected: a character on the token
+      // always wins. The roster lookup is local, so a player's client could not do this
+      // even if it tried — which is the point.
+      if (!next && role === "GM") {
+        const withNpc = items.find((i) => readNpcTokenRef(i.metadata?.[NPC_KEY]));
+        const ref = withNpc && readNpcTokenRef(withNpc.metadata[NPC_KEY]);
+        const found = ref && findNpc(ref.id);
+        if (found) {
+          npc = { itemId: withNpc.id, npc: found, mode: activeNpc && activeNpc.npc.id === found.id ? activeNpc.mode : "truth" };
+        } else if (ref) {
+          setStatus("That token's NPC is not in this browser's roster.");
+        }
+      }
     }
   } catch {
     // No scene open, or the selection went away mid-read. Fall back to manual.
     next = null;
+    npc = null;
   }
   activeChar = next;
+  activeNpc = npc;
   applyChar();
 }
 
 function applyChar() {
   const banner = el("char-banner");
   const manual = [attrValEl, skillValEl];
+
+  if (!activeChar && activeNpc) {
+    applyNpc(banner, manual);
+    return;
+  }
 
   if (!activeChar) {
     banner.hidden = true;
@@ -445,9 +490,48 @@ function applyChar() {
 }
 
 function syncValuesFromChar() {
+  if (activeNpc && !activeChar) {
+    const v = npcRollValues(activeNpc.npc, { attr: attrKeyEl.value, skill: skillKeyEl.value, mode: activeNpc.mode });
+    attrValEl.value = v.attr;
+    skillValEl.value = v.skill;
+    return;
+  }
   if (!activeChar) return;
   attrValEl.value = activeChar.snap.attrs?.[attrKeyEl.value] ?? 0;
   skillValEl.value = activeChar.snap.skills?.[skillKeyEl.value] ?? 0;
+}
+
+// 1.5. The banner for an NPC token. A Normal NPC has no per-attribute numbers — it has a
+// Truth pair and a default pair, and which applies is the GM's call — so the banner
+// offers the choice. A Major NPC fills from the dropdowns like a character.
+//
+// The roll goes out under the NPC's name, the same as a character's. The banner says so,
+// because a GM rolling for a still-hidden adversary may want Hidden, or a different name.
+function applyNpc(banner, manual) {
+  const { npc, mode } = activeNpc;
+  charEl.value = npc.name;
+  manual.forEach((i) => i.setAttribute("readonly", "readonly"));
+  syncValuesFromChar();
+  banner.innerHTML = "";
+  const left = document.createElement("span");
+  left.textContent = `Rolling as ${npc.name} (only you can see this)`;
+  banner.append(left);
+  if (npc.kind !== "major") {
+    const seg = document.createElement("span");
+    seg.className = "npc-mode";
+    for (const [key, label] of [["truth", `${npc.truth || "Truth"} ${npc.main.attr}/${npc.main.skill}`], ["default", `Default ${npc.fallback.attr}/${npc.fallback.skill}`]]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ghost npc-mode-btn" + (mode === key ? " on" : "");
+      b.textContent = label;
+      b.title = key === "truth" ? "The test is one its Truth covers" : "Anything else";
+      b.addEventListener("click", () => { activeNpc.mode = key; applyChar(); });
+      seg.append(b);
+    }
+    banner.append(seg);
+  }
+  banner.hidden = false;
+  updateHint();
 }
 
 // -------------------------------------------------------------
@@ -496,8 +580,19 @@ function render() {
   renderPool("momentum", state.momentum ?? 0);
   renderPool("threat", state.threat ?? 0);
   document.querySelectorAll('[data-pool="threat"]').forEach((b) => { b.disabled = role !== "GM"; });
+  applyRushed();
+  renderNextRoundLabel();
 
-  const merged = [...state.log, ...hiddenLog].sort((a, b) => b.t - a.t);
+  // 1.5. The GM's own lines from the GM tools. Each SHADOWS the public line it belongs
+  // to — "Threat spent" becomes "Reveal: the ally is the traitor" on the GM's screen —
+  // so the GM reads one line per press rather than two. Players never have these.
+  let gmLog = [];
+  if (role === "GM" && !standalone) gmLog = readGmLog(gmHost.room());
+  const shadowed = new Set(gmLog.map((e) => e.shadows).filter(Boolean));
+  const publicLog = shadowed.size ? state.log.filter((e) => !shadowed.has(e.id)) : state.log;
+  // A private line whose public twin has aged out of the room log is older than anything
+  // the table can see. Kept anyway, but it sorts by its own time like everything else.
+  const merged = [...publicLog, ...hiddenLog, ...gmLog].sort((a, b) => b.t - a.t);
 
   logEl.innerHTML = "";
   if (merged.length === 0) {
@@ -532,6 +627,14 @@ function renderActionEntry(e) {
   lab.className = "entry-label";
   lab.textContent = e.label;
   head.append(lab);
+  if (e.gm) {
+    li.classList.add("is-gm");
+    const tag = document.createElement("span");
+    tag.className = "entry-hidden-tag is-gm";
+    tag.textContent = "Only you";
+    tag.title = "From the GM tools. The table's log shows only the public part of this, if any.";
+    head.append(tag);
+  }
   li.append(head);
 
   if (e.detail) {
@@ -760,44 +863,38 @@ function setConcealMode(mode) {
 // v0.9.0: EPOCH_LABELS moved to dnm.js. The party panel names the same boundaries
 // when it reports what a character is waiting on, and two copies would drift.
 
+// 1.5: the body moved to pushEpochVia() in gmpanel.js, unchanged, so that the GM tools'
+// "End Scene, rushed" and Reversal end a scene exactly the way this button does —
+// including the 1 Momentum the group loses (0.9.5), which is applied on the GM's single
+// press and never on a sheet, or five sheets ending one scene would cost five.
+const REST_KEYS = ["breather", "break", "bed"];
+
 async function pushEpoch(boundary) {
   if (role !== "GM" || !EPOCH_KEYS.includes(boundary)) return;
-  const label = EPOCH_LABELS[boundary] || boundary;
-  await announce({
-    type: "epoch",
-    boundary,
-    entry: {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      t: Date.now(),
-      kind: "action",
-      who: "GM",
-      label,
-      detail: "called for the whole table",
-    },
-  });
-  // 0.9.5. Ending a scene costs the group 1 Momentum, per the rules.
-  //
-  // Applied HERE, on the GM's single press, and deliberately not on the sheet's own
-  // End Scene button. A sheet-side deduction would fire once per character — five
-  // players ending the same scene would cost the table five Momentum. The scene ends
-  // once, so the pool moves once, and the GM is the one who ends it.
-  if (boundary === "scene") {
-    await announce({ type: "pool", pool: "momentum", delta: -1 });
-    await announce({
-      type: "action",
-      entry: {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        t: Date.now(),
-        kind: "action",
-        who: "GM",
-        label: "End Scene",
-        detail: "the group loses 1 Momentum",
-        pool: "momentum",
-        delta: -1,
-      },
+  // Re-checked here rather than trusted from the disabled button: the button can have
+  // been armed a moment before the rush landed.
+  if (REST_KEYS.includes(boundary) && readRushed(state)) {
+    setStatus("The table is rushed. Lift the rush in GM Tools first.");
+    return;
+  }
+  await pushEpochVia(gmHost, boundary);
+  setStatus(`${EPOCH_LABELS[boundary] || boundary} sent to the table.`);
+}
+
+// 1.5. While the GM has rushed the table, the three rests are greyed here exactly as they
+// are on every sheet. See readRushed() in dnm.js.
+function applyRushed() {
+  const rushed = readRushed(state);
+  if (gmPanel) {
+    gmPanel.querySelectorAll("[data-epoch]").forEach((b) => {
+      if (!REST_KEYS.includes(b.dataset.epoch)) return;
+      if (b.classList.contains("armed")) return;
+      b.disabled = rushed;
+      b.title = rushed ? "Rushed: no rest before the next scene (GM Guide p.101). Lift it in GM Tools." : "";
     });
   }
-  setStatus(`${label} sent to the table.`);
+  const badge = el("rushed-badge");
+  if (badge) badge.hidden = !rushed;
 }
 
 // Two-step confirm. A disable-after-click guard stops a double press but does nothing
@@ -1321,21 +1418,13 @@ function sendInit(action, extra = {}) {
 
 // Starting seeds the tracker from the characters already on tokens, because that is
 // the party and typing them in would be the first thing anyone complained about.
+//
+// 1.5: the body moved to startInitiativeVia() in gmpanel.js, because putting an NPC
+// into the fight from the GM tools starts a round the same way. Same keys — the row id
+// is the character's name key, so one character on two tokens is still one row.
 async function startInitiative() {
   if (role !== "GM") return;
-  await sendInit("start");
-  try {
-    const items = await OBR.scene.items.getItems();
-    for (const { code } of characterTokens(items)) {
-      const name = nameForCode(code);
-      if (!name) continue;
-      // Keyed on the name, the same identity the roll merge and the recovery list
-      // use, so one character on two tokens is still one row in the order.
-      await sendInit("add", { id: initRowIdForCharacter(name), name, kind: "pc" });
-    }
-  } catch (err) {
-    console.error("[dnm] could not read the scene to seed initiative", err);
-  }
+  await startInitiativeVia(gmHost);
   setStatus("Initiative started.");
 }
 
@@ -1409,6 +1498,128 @@ function renderInitiativeHeader() {
   }
 }
 
+// 1.5. Next Round adds the round's Threat from the GM's tickers, one log line per ticker,
+// for the round that just ENDED. With nothing ticking it is the single press it always
+// was. With something ticking it asks first, the same two-press arm as the table
+// controls, and says how much — a press that quietly adds Threat is not one press.
+//
+// Fired from here, on the GM's own press, and never from the reducer: the reducer runs
+// on every client, and a tick there would add the Threat once per client.
+let nextArmed = false;
+let nextTimer = null;
+
+function pendingTick() {
+  if (role !== "GM" || standalone) return 0;
+  return tickerTotal(readTickers(gmHost.room()));
+}
+
+function renderNextRoundLabel() {
+  const next = el("init-next");
+  if (!next || nextArmed) return;
+  const n = pendingTick();
+  next.textContent = n ? `Next Round (+${n})` : "Next Round";
+}
+
+function disarmNext() {
+  nextArmed = false;
+  if (nextTimer) { clearTimeout(nextTimer); nextTimer = null; }
+  const next = el("init-next");
+  if (next) next.classList.remove("armed");
+  renderNextRoundLabel();
+}
+
+async function pressNextRound() {
+  if (role !== "GM") return;
+  const n = pendingTick();
+  const next = el("init-next");
+  if (n && !nextArmed) {
+    nextArmed = true;
+    next.textContent = `Confirm +${n} Threat?`;
+    next.classList.add("armed");
+    nextTimer = setTimeout(disarmNext, 4000);
+    return;
+  }
+  const init = readInitiative(state);
+  const ended = init ? init.round : 0;
+  disarmNext();
+  next.disabled = true;
+  try {
+    await sendInit("next");
+    if (n) {
+      const lines = await tickRound(gmHost, ended);
+      setStatus(`Round ${ended} ended: +${n} Threat from ${lines} ticker${lines === 1 ? "" : "s"}.`);
+    }
+  } finally {
+    setTimeout(() => { next.disabled = false; }, 600);
+  }
+}
+
+// 1.5. The GM tools, in the roller. Mounted once the client knows it is the GM, and
+// replaced by a one-line placeholder while they are popped out into their own panel.
+function applyGmTools() {
+  const box = el("gm-tools");
+  if (!box) return;
+  const gm = role === "GM" && !standalone;
+  box.hidden = !gm;
+  if (!gm) {
+    // Emptied, not just hidden: a GM demoted mid-session should not keep the roster
+    // sitting in the page behind a hidden attribute.
+    if (gmTools) gmTools.destroy();
+    box.textContent = "";
+    gmTools = null;
+    return;
+  }
+  const popped = isPoppedOut();
+  box.classList.toggle("is-popped", popped);
+  if (popped) {
+    if (gmTools) gmTools.destroy();
+    gmTools = null;
+    // The pop-out's heartbeat lands here every two seconds. Rebuilding the placeholder
+    // each time could swallow a click on Bring back mid-press, so it is built once.
+    if (box.querySelector(".gmt-back")) return;
+    box.textContent = "";
+    const head = document.createElement("div");
+    head.className = "gm-panel-head";
+    const h2 = document.createElement("h2");
+    h2.textContent = "GM Tools";
+    const note = document.createElement("span");
+    note.className = "gm-note";
+    note.textContent = "Open in their own panel.";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "ghost gmt-back";
+    back.textContent = "Bring back";
+    back.title = "Close the popped-out GM tools and show them here again";
+    back.addEventListener("click", async () => {
+      markPopped(false);
+      try { await OBR.popover.close(GM_POPOVER_ID); } catch (err) { /* already closed */ }
+      applyGmTools();
+    });
+    head.append(h2, note, back);
+    box.append(head);
+    return;
+  }
+  if (!gmTools || !box.querySelector(".gmt-head")) {
+    gmTools = mountGmPanel(box, gmHost, {
+      mode: "inline",
+      onPopOut: async () => {
+        try {
+          // Marked BEFORE the open resolves, so this panel folds away at once rather than
+          // drawing the same tools twice for the length of the round trip.
+          markPopped(true);
+          applyGmTools();
+          await openGmPopover(OBR, safeStorage());
+        } catch (err) {
+          markPopped(false);
+          applyGmTools();
+          setStatus("Could not open the GM panel.");
+          console.error("[dnm] GM panel open failed", err);
+        }
+      },
+    });
+  }
+}
+
 function wirePartyShare() {
   const share = el("party-share");
   if (!share) return;
@@ -1422,7 +1633,7 @@ function wireInitiative() {
   const start = el("init-start");
   if (start) start.addEventListener("click", startInitiative);
   const next = el("init-next");
-  if (next) next.addEventListener("click", () => sendInit("next"));
+  if (next) next.addEventListener("click", pressNextRound);
   const end = el("init-end");
   if (end) {
     end.addEventListener("click", () => {
@@ -1431,7 +1642,10 @@ function wireInitiative() {
       // inherit the last one's name.
       const storage = safeStorage();
       if (storage) { try { storage.removeItem(hiddenNamesKey()); } catch (err) { /* blocked */ } }
+      // 1.5. The GM tools' fight list ends with the round.
+      endFight(gmHost.room());
       sendInit("end");
+      if (gmTools) gmTools.refresh();
     });
   }
   const add = el("init-add");
@@ -1754,6 +1968,8 @@ async function startInOwlbear() {
 
   await load();
   render();
+  applyGmTools();
+  wireGmToolsSync();
 
   // v0.9.0 fix: the selection was only ever read inside player.onChange, so opening
   // the popover with a token already selected showed no character until you clicked
@@ -1782,6 +1998,7 @@ async function startInOwlbear() {
     refreshParty();
     refreshHasGM();
     render();
+    applyGmTools();
   });
 
   // 0.9.10. Someone else being promoted or leaving changes whether the room has a GM,
@@ -1793,6 +2010,7 @@ async function startInOwlbear() {
   // string comparison and returns.
   OBR.scene.items.onChange((items) => {
     refreshParty(items);
+    if (gmTools) gmTools.sceneChanged();
     // Not signature-guarded the way refreshParty() is: the recovery list changes
     // when a token appears as well as when one goes, and an appearing token is
     // exactly the case that must remove a row.
@@ -1836,10 +2054,31 @@ async function startInOwlbear() {
     // real. Settled before the render, or the display would add it on twice.
     poolBatch.settle();
     render();
+    if (gmTools) gmTools.refresh();
     // The room's epochs are half of every party row's verdict, so a boundary press
     // moves every character from caught up to behind at once.
     refreshParty();
   });
+}
+
+// 1.5. The roller and the popped-out GM panel share an origin and so localStorage. A
+// write in the other frame arrives here as a `storage` event — the GM's log, a ticker, a
+// fight row — and the pop-out's heartbeat going stale is how a closed or reloaded
+// pop-out hands the tools back to this panel.
+let poppedWas = false;
+function wireGmToolsSync() {
+  window.addEventListener("storage", (e) => {
+    if (!e.key || !e.key.startsWith(ID) || role !== "GM") return;
+    if (e.key === GM_KEYS.popped) { applyGmTools(); return; }
+    render();
+    if (gmTools) gmTools.refresh();
+  });
+  poppedWas = isPoppedOut();
+  setInterval(() => {
+    if (role !== "GM") return;
+    const now = isPoppedOut();
+    if (now !== poppedWas) { poppedWas = now; applyGmTools(); }
+  }, 3000);
 }
 
 // -------------------------------------------------------------

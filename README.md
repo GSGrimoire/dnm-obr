@@ -23,7 +23,8 @@ Upload all files to the root of it:
 manifest.json      background.html    icon.svg
 index.html         background.js      icon-attach.svg
 roller.js          dnm.js             icon-sheet.svg
-style.css          sdk.js
+style.css          sdk.js             gm.html
+gmpanel.js         gmrules.js         gm.js
 ```
 
 `sdk.js` is the vendored Owlbear SDK, added in 0.9.1. It is committed rather than

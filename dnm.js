@@ -5,6 +5,9 @@
 
 export const ID = "com.thuknights.dnm-obr";
 export const CHAR_KEY = `${ID}/char`;
+// 1.5. An adversary attached to a token. Holds an OPAQUE roster id and nothing else —
+// see npcTokenRef() in gmrules.js for why the name and the stats never go on the token.
+export const NPC_KEY = `${ID}/npc`;
 
 // -------------------------------------------------------------
 // The docked sheet (1.0, regrid 1.1)
@@ -297,11 +300,55 @@ export function writeDock(storage, dock) {
   return d;
 }
 
+// -------------------------------------------------------------
+// The GM panel's own dock (1.5)
+// -------------------------------------------------------------
+// The GM tools pop out the same way the sheet docks: a popover pinned to one of the nine
+// anchors, sized per anchor, zoomable. Everything about the geometry is the sheet's —
+// sheetPopover() is reused whole and only the id is swapped — because the constraint
+// that shaped it (size is live, position costs a reopen) is Owlbear's, not the sheet's.
+//
+// Two things differ and both are deliberate:
+//
+//   ITS OWN ID. The sheet and the GM panel are open at the same time; one id would make
+//   opening either close the other.
+//   ITS OWN STORAGE KEY, defaulting to the LEFT. The sheet defaults to the right, and a GM
+//   who moves one should not find the other has followed it there.
+//
+// Deliberately NOT inside the block the creator copies. The creator never opens this
+// panel, and dock.test.mjs compares the copied helpers one for one.
+export const GM_POPOVER_ID = `${ID}/gm-panel`;
+export const GM_DOCK_KEY = `${ID}/gm-dock`;
+export const GM_PANEL_PATH = "gm.html";
+
+export function readGmDock(storage) {
+  try {
+    const raw = storage && storage.getItem(GM_DOCK_KEY);
+    return clampDock(raw ? JSON.parse(raw) : { anchor: "left" });
+  } catch (err) {
+    return clampDock({ anchor: "left" });
+  }
+}
+
+export function writeGmDock(storage, dock) {
+  const d = clampDock(dock);
+  try {
+    if (storage) storage.setItem(GM_DOCK_KEY, JSON.stringify(d));
+  } catch (err) {
+    /* the dock just does not persist */
+  }
+  return d;
+}
+
+export function gmPopover({ url, dock, viewport }) {
+  return { ...sheetPopover({ url, dock, viewport }), id: GM_POPOVER_ID };
+}
+
 // The extension version in a place JavaScript can read. Its only consumer is
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.4C";
+export const EXT_VERSION = "1.5";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
@@ -316,8 +363,10 @@ export const CHANNEL = `${ID}/events`;
 // v4 (extension 0.9.6): bonds added — a short queue of pending bond effects waiting
 // for the sheet they belong to. Same defaulting rule again: a room written before
 // 0.9.6 has no bonds key, and a reader must treat that as an empty queue.
+// v6 (extension 1.5): rushed added. Same defaulting rule as every key before it — a room
+// written before 1.5 has none, and a reader must treat that as "not rushed".
 export const EMPTY_STATE = {
-  v: 5, momentum: 0, threat: 0, log: [],
+  v: 6, momentum: 0, threat: 0, log: [],
   epochs: { scene: 0, session: 0, adventure: 0, breather: 0, break: 0, bed: 0 },
   compAt: 20,
   bonds: [],
@@ -328,7 +377,39 @@ export const EMPTY_STATE = {
   // asked for; the alternative would have been to keep the old GM-only behaviour and
   // make the GM find a switch to get what they said they wanted.
   partyShared: true,
+  // 1.5. The GM spent 2 Threat to deny the table its rest between scenes. Holds the
+  // scene epoch it was set in; see readRushed().
+  rushed: null,
 };
+
+// -------------------------------------------------------------
+// Rushed (1.5)
+// -------------------------------------------------------------
+// GM Guide p.101: "If the next scene is only a short time later, with no opportunity to
+// rest between them ... the GM may spend 2 Threat to reflect this, preventing the players
+// from taking this rest."
+//
+// WHY IT STORES A SCENE NUMBER RATHER THAN A FLAG. A flag needs someone to clear it, and
+// every clearing rule tried on paper was wrong for one order of presses or the other.
+// The press is "End Scene, rushed" — one action that ends the scene, pays the 2 Threat
+// and records the scene epoch it produced. The table is rushed for as long as the room is
+// still in THAT scene, and the next End Scene lifts it with nothing to remember. The GM
+// can also lift it by hand.
+//
+// It blocks Break and Bed as well as the Breather. The rule names the Breather because it
+// is the rest a table normally expects; with no time for five minutes there is no time
+// for a night's sleep either. Decided with the table, not inferred.
+//
+// It is a reminder, not a lock. Each sheet greys its own rest buttons, which is code
+// running in the player's own tab — the same honesty `mayMarkRow()` is written with. A
+// rest taken anyway still lands in the shared log.
+export function readRushed(state) {
+  const raw = state && state.rushed;
+  if (!raw || typeof raw !== "object") return false;
+  const at = Math.round(Number(raw.scene));
+  if (!Number.isFinite(at)) return false;
+  return at === readEpochs(state).scene;
+}
 
 // -------------------------------------------------------------
 // Initiative (1.4)
@@ -753,7 +834,25 @@ export const BOND_EFFECT_TTL_MS = 6 * 60 * 60 * 1000;
 // 0.9.8 adds "drive": the Maverick temperament's "when the GM spends 3 or more Threat
 // at once, regain 1 Spirit". It travels the same queue as the two bonds because it has
 // the same problem — it pays out on sheets that are shut.
-const BOND_KINDS = new Set(["rivalry", "grant", "drive"]);
+//
+// 1.5 adds two more, both GM-only and both for the same reason — they pay out on sheets
+// that are shut:
+//
+//   ADVERSITY  GM Guide p.125: "Characters gain growth when they face adversity, in any
+//              situation where you spend three or more Threat in one go." One Growth to
+//              each character it names. Sent from the same place the Maverick drive is,
+//              because it reads the same spend.
+//   REVERSAL   GM Guide p.115: "let each of the PCs recover half their maximum Spirit when
+//              the scene ends." Only the sheet knows its own maximum, so the queue carries
+//              no amount — each sheet works out its own half.
+//
+// Both carry `targets`: the names of the characters on tokens in the scene when the GM
+// pressed. A character in another scene, or attached to nobody, is not facing this
+// adversity. An effect with no targets reaches every sheet, which is what the creator's
+// own sender does — it cannot read the scene.
+const BOND_KINDS = new Set(["rivalry", "grant", "drive", "adversity", "reversal"]);
+const GM_BOND_KINDS = new Set(["drive", "adversity", "reversal"]);
+export const MAX_EFFECT_TARGETS = 8;
 
 // The threshold in the Maverick drive's own text. Below 0.9.7 this was undetectable:
 // a GM spending 3 pressed - three times and it arrived as three spends of 1, so
@@ -787,6 +886,19 @@ export function sanitizeBondEffect(effect) {
     from: cleanText(effect.from, FIELD_LIMITS.who),
   };
   if (effect.kind === "rivalry") return base;
+
+  if (effect.kind === "adversity" || effect.kind === "reversal") {
+    const targets = (Array.isArray(effect.targets) ? effect.targets : [])
+      .slice(0, MAX_EFFECT_TARGETS)
+      .map((n) => cleanText(n, FIELD_LIMITS.who))
+      .filter((n) => n.trim());
+    return {
+      ...base,
+      targets,
+      // The size of the spend, for the recipient's log line. Reversal carries none.
+      amount: Math.max(0, Math.min(999, Math.round(Number(effect.amount) || 0))),
+    };
+  }
 
   if (effect.kind === "drive") {
     // No target: like a rivalry, every sheet decides for itself whether it is owed —
@@ -932,7 +1044,9 @@ export function createPoolBatcher(send, opts = {}) {
 // The creator's own tooltip had it right all along — "Anyone can add; only the GM
 // should spend" — so what is privileged is the DIRECTION, not the pool. A player can
 // pay Threat in and cannot drain it.
-const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt", "partyShared"]);
+// 1.5: "rush" — denying the table its rest reaches every sheet, which is the same reason
+// an epoch is privileged.
+const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt", "partyShared", "rush"]);
 
 export function isGmOnlyEvent(ev) {
   if (!ev || typeof ev !== "object") return false;
@@ -942,7 +1056,9 @@ export function isGmOnlyEvent(ev) {
   // who already holds the matching bond — a forged drive would reach every Maverick at
   // the table on nobody's authority. It is cheap to put it behind the real check, so
   // it goes behind the real check.
-  if (ev.type === "bond") return ev.effect?.kind === "drive";
+  // 1.5: adversity and reversal join it. Both read "the GM spends", and a forged one
+  // would hand Growth or half a Spirit track to the whole table.
+  if (ev.type === "bond") return GM_BOND_KINDS.has(ev.effect?.kind);
   // 1.4. Running the round is the GM's: starting, ending, adding, removing, ordering
   // and hiding all reach every client and none of them is a thing a player does.
   //
@@ -1059,6 +1175,16 @@ export function applyEvent(state, ev) {
     next.initiative = applyInitiativeAction(readInitiative(next), ev);
   } else if (ev?.type === "partyShared") {
     next.partyShared = !!ev.value;
+  } else if (ev?.type === "rush") {
+    // 1.5. Stamped with the scene the room is in NOW, which is why the GM panel sends
+    // this after its End Scene rather than before: the rush covers the scene that
+    // follows the one it ended. See readRushed().
+    next.rushed = ev.value ? { scene: readEpochs(next).scene } : null;
+    const entry = sanitizeEntry(ev.entry);
+    if (entry && !next.log.some((e) => e.id === entry.id)) {
+      next.log.unshift(entry);
+      next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+    }
   } else if (ev?.type === "clear") {
     next.log = [];
   }
@@ -1087,6 +1213,9 @@ export function trimState(state) {
   // opposite position from the documented default.
   next.initiative = readInitiative(next);
   next.partyShared = next.partyShared !== false;
+  // 1.5. Normalised to the one shape readRushed() reads, and dropped once it has lapsed:
+  // a rush from three scenes ago is just bytes.
+  next.rushed = readRushed(next) ? { scene: readEpochs(next).scene } : null;
   // 0.9.6. Pending bond effects are trimmed by age and count here, and then left
   // alone by the loop below. They are a dozen small objects at most, and unlike a log
   // line an undrained one still owes somebody a Spirit — so the log gives way to them
@@ -1573,6 +1702,25 @@ export async function openSheetPopover(obr, itemId, storage) {
   const dock = storage ? readDock(storage) : clampDock(null);
   const url = `${SHEET_URL}?item=${encodeURIComponent(itemId)}`;
   await obr.popover.open(sheetPopover({ url, dock, viewport }));
+}
+
+// 1.5. The GM panel, popped out. Resolved against THIS file rather than a hardcoded
+// host so a staged copy under test opens its own page, not the live one.
+export function gmPanelUrl() {
+  return new URL(GM_PANEL_PATH, import.meta.url).href;
+}
+
+export async function openGmPopover(obr, storage) {
+  let viewport = null;
+  try {
+    const [width, height] = await Promise.all([
+      obr.viewport.getWidth(), obr.viewport.getHeight(),
+    ]);
+    viewport = { width, height };
+  } catch (err) {
+    viewport = null;
+  }
+  await obr.popover.open(gmPopover({ url: gmPanelUrl(), dock: readGmDock(storage), viewport }));
 }
 
 // -------------------------------------------------------------
