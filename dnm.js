@@ -1182,6 +1182,22 @@ export function rerollLines(entry) {
 // the free rerolls and modifiers that character actually has. Conditions the sheet
 // cannot see — "when aiming", "a trading test" — come back as `when`, and the person
 // confirms them; the free reroll is theirs to claim honestly.
+// Whether a free reroll is LIKELY to apply, which decides whether the yellow reminder is
+// drawn — never whether the reroll is allowed. Asked for after the first playtest: a hint
+// on every Fight roll for a Tactical Lens, or on a roll where every die already
+// succeeded, is noise. So a hint needs a die worth rerolling (a failure or a
+// Complication), and a source may narrow it further with `hintSkills` (Supply and Demand
+// on Talk; Evade on Fight or Move) or `hintMinDice` (Extra Effort and Tool Rig need dice
+// bought beyond the base two). The creator writes both into the snapshot.
+export function rerollHintLikely(entry, src) {
+  const detail = Array.isArray(entry && entry.detail) ? entry.detail : [];
+  if (!detail.some((x) => x && (x.kind === "fail" || x.kind === "complication"))) return false;
+  const skill = String(entry.sn || "").toLowerCase();
+  if (src && Array.isArray(src.hintSkills) && src.hintSkills.length && !src.hintSkills.includes(skill)) return false;
+  if (src && Number(src.hintMinDice) > 0 && detail.length < Number(src.hintMinDice)) return false;
+  return true;
+}
+
 export function rerollOptions(entry, who = {}) {
   if (!entry || entry.kind === "action" || entry.claimed) return [];
   const out = [];
@@ -1201,10 +1217,10 @@ export function rerollOptions(entry, who = {}) {
     for (const src of sources) {
       if (!src || !REROLL_FREE.includes(src.id) || src.id === "inspire") continue;
       if (!fits(src)) continue;
-      offer(src.id, { max: 1, cost: "free", when: src.when || "", text: src.text || "" });
+      offer(src.id, { max: 1, cost: "free", when: src.when || "", text: src.text || "", likely: rerollHintLikely(entry, src) });
     }
     if (who.inspireAt && who.firstAfterInspire === entry.id) {
-      offer("inspire", { max: 1, cost: "free", when: "", text: "An ally with Inspire restored your Spirit: re-roll 1d20 on your next Skill Test for free." });
+      offer("inspire", { max: 1, cost: "free", when: "", likely: rerollHintLikely(entry, null), text: "An ally with Inspire restored your Spirit: re-roll 1d20 on your next Skill Test for free." });
     }
   } else if (who.kind === "gm") {
     if ((who.personalThreat ?? 0) >= 1) offer("personalThreat", { max: 1, cost: "1 Personal Threat" });
