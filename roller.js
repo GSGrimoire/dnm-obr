@@ -31,7 +31,14 @@ import {
   ID, mayMarkRow, initRowLabel, initRowIdForCharacter,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
+  readRushed, NPC_KEY, openGmPopover, GM_POPOVER_ID,
+  rerollOptions, rerollLines, rerollProblem, applyReroll, REROLL_LABELS, classifyDie, bondNameKey,
 } from "./dnm.js";
+import {
+  mountGmPanel, pushEpochVia, startInitiativeVia, tickRound, spendSideEffects, readFight, spendPersonalThreat,
+  readGmLog, readTickers, isPoppedOut, markPopped, findNpc, GM_KEYS, endFight,
+} from "./gmpanel.js";
+import { tickerTotal, npcRollValues, readNpcTokenRef } from "./gmrules.js";
 
 const MAX_LOG_ENTRIES = 40;
 
@@ -50,6 +57,40 @@ let difficulty = 1;
 // has no idea who you are on its own, so selection is what tells it. Read
 // only here: the sheet owns edits to the character.
 let activeChar = null;
+
+// 1.5. An NPC on the selected token, GM only. The token carries an opaque roster id and
+// the stat block comes from this browser's roster, so a player selecting the same token
+// gets nothing — there is nothing on it to read. `mode` picks a Normal NPC's pair.
+let activeNpc = null;
+
+// 1.5. The scene's items, as last seen. A reroll of a character's roll looks the
+// character up here for its Spirit and its free rerolls; asking Owlbear on every render
+// would be a round trip per log entry.
+let sceneItems = [];
+
+// The dice picked for a reroll: one roll at a time, a set of die indices.
+let rerollPick = { id: null, dice: new Set() };
+let rerollArmed = null;
+let rerollTimer = null;
+
+// 1.5. The GM tools, drawn below Table Controls (or popped out into their own panel).
+let gmTools = null;
+
+// What gmpanel.js needs from wherever it is mounted. The pop-out builds the same shape
+// from the SDK in gm.js; this one routes through the roller's own announce(), so a GM
+// tools press flushes a run of pool nudges first, exactly like any other event.
+const gmHost = {
+  state: () => state,
+  room: () => { try { return OBR.room.id; } catch (err) { return "unknown"; } },
+  playerName: () => playerName,
+  announce: (ev) => announce(ev),
+  items: () => OBR.scene.items.getItems(),
+  itemsById: (ids) => OBR.scene.items.getItems(ids),
+  selection: () => OBR.player.getSelection(),
+  updateItems: (ids, fn) => OBR.scene.items.updateItems(ids, fn),
+  status: (msg) => setStatus(msg),
+  changed: () => { render(); if (gmTools) gmTools.refresh(); },
+};
 
 // The roll engine, the attribute and skill names, and the room metadata key
 // all live in dnm.js so the sheet and the roller can never disagree about what
@@ -164,6 +205,12 @@ async function doRoll() {
     comp: result.complications,
     pass: result.passed,
     gain: result.momentumGained,
+    // 1.5. What a reroll of this roll is paid from: the selected character's Spirit,
+    // the GM's Threat for an NPC (with its roster id, for Personal Threat), or the GM's
+    // Threat for anything else the GM rolls. A player rolling with no character selected
+    // has nothing to pay with and gets no reroll.
+    by: myPlayerId,
+    ...(activeChar ? { src: "pc" } : activeNpc ? { src: "npc", nid: activeNpc.npc.id } : role === "GM" ? { src: "gm" } : {}),
   };
 
   // SECRET: nothing leaves this browser, so no one can tell a roll happened. GM only
@@ -248,24 +295,18 @@ const poolBatch = createPoolBatcher(async ({ pool, delta, label }) => {
 // Maverick, exactly as a rivalry bond has every sheet decide whether it holds the bond.
 // Role-checked here to stop an honest misclick, and GM-only in the reducer where it
 // actually counts.
+//
+// 1.5: the announcing moved to spendSideEffects() in gmpanel.js, which the GM tools use
+// too, and gained adversity Growth (GM Guide p.125) alongside the drive. One function, so
+// the − button here and a spend in the GM tools cannot set off different things.
 async function announceThreatSpendDrive(pool, delta) {
   if (pool !== "threat" || role !== "GM") return;
   if (delta > -DRIVE_THREAT_SPEND_MIN) return;
   const spent = Math.abs(delta);
-  await announce({
-    type: "bond",
-    effect: {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      t: Date.now(),
-      kind: "drive",
-      drive: "maverick",
-      from: playerName,
-      amount: spent,
-    },
-  });
+  const said = await spendSideEffects(gmHost, spent);
   // The GM gets told too. A drive that fires silently on somebody else's sheet is
   // exactly the thing the log exists to prevent.
-  setStatus(`Spent ${spent} Threat at once — every Maverick regains 1 Spirit.`);
+  setStatus(`Spent ${spent} Threat at once — ${said.join(", ")}.`);
 }
 
 function stepPool(pool, delta) {
@@ -392,6 +433,7 @@ async function clearLog() {
 // -------------------------------------------------------------
 async function refreshSelection() {
   let next = null;
+  let npc = null;
   try {
     const sel = await OBR.player.getSelection();
     if (sel && sel.length) {
@@ -401,18 +443,38 @@ async function refreshSelection() {
         const r = parseCode(withChar.metadata[CHAR_KEY].code);
         if (!r.error) next = { itemId: withChar.id, snap: r.snap, char: r.char };
       }
+      // 1.5. GM only, and only when no character is selected: a character on the token
+      // always wins. The roster lookup is local, so a player's client could not do this
+      // even if it tried — which is the point.
+      if (!next && role === "GM") {
+        const withNpc = items.find((i) => readNpcTokenRef(i.metadata?.[NPC_KEY]));
+        const ref = withNpc && readNpcTokenRef(withNpc.metadata[NPC_KEY]);
+        const found = ref && findNpc(ref.id);
+        if (found) {
+          npc = { itemId: withNpc.id, npc: found, mode: activeNpc && activeNpc.npc.id === found.id ? activeNpc.mode : "truth" };
+        } else if (ref) {
+          setStatus("That token's NPC is not in this browser's roster.");
+        }
+      }
     }
   } catch {
     // No scene open, or the selection went away mid-read. Fall back to manual.
     next = null;
+    npc = null;
   }
   activeChar = next;
+  activeNpc = npc;
   applyChar();
 }
 
 function applyChar() {
   const banner = el("char-banner");
   const manual = [attrValEl, skillValEl];
+
+  if (!activeChar && activeNpc) {
+    applyNpc(banner, manual);
+    return;
+  }
 
   if (!activeChar) {
     banner.hidden = true;
@@ -445,9 +507,48 @@ function applyChar() {
 }
 
 function syncValuesFromChar() {
+  if (activeNpc && !activeChar) {
+    const v = npcRollValues(activeNpc.npc, { attr: attrKeyEl.value, skill: skillKeyEl.value, mode: activeNpc.mode });
+    attrValEl.value = v.attr;
+    skillValEl.value = v.skill;
+    return;
+  }
   if (!activeChar) return;
   attrValEl.value = activeChar.snap.attrs?.[attrKeyEl.value] ?? 0;
   skillValEl.value = activeChar.snap.skills?.[skillKeyEl.value] ?? 0;
+}
+
+// 1.5. The banner for an NPC token. A Normal NPC has no per-attribute numbers — it has a
+// Truth pair and a default pair, and which applies is the GM's call — so the banner
+// offers the choice. A Major NPC fills from the dropdowns like a character.
+//
+// The roll goes out under the NPC's name, the same as a character's. The banner says so,
+// because a GM rolling for a still-hidden adversary may want Hidden, or a different name.
+function applyNpc(banner, manual) {
+  const { npc, mode } = activeNpc;
+  charEl.value = npc.name;
+  manual.forEach((i) => i.setAttribute("readonly", "readonly"));
+  syncValuesFromChar();
+  banner.innerHTML = "";
+  const left = document.createElement("span");
+  left.textContent = `Rolling as ${npc.name} (only you can see this)`;
+  banner.append(left);
+  if (npc.kind !== "major") {
+    const seg = document.createElement("span");
+    seg.className = "npc-mode";
+    for (const [key, label] of [["truth", `${npc.truth || "Truth"} ${npc.main.attr}/${npc.main.skill}`], ["default", `Default ${npc.fallback.attr}/${npc.fallback.skill}`]]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ghost npc-mode-btn" + (mode === key ? " on" : "");
+      b.textContent = label;
+      b.title = key === "truth" ? "The test is one its Truth covers" : "Anything else";
+      b.addEventListener("click", () => { activeNpc.mode = key; applyChar(); });
+      seg.append(b);
+    }
+    banner.append(seg);
+  }
+  banner.hidden = false;
+  updateHint();
 }
 
 // -------------------------------------------------------------
@@ -496,8 +597,19 @@ function render() {
   renderPool("momentum", state.momentum ?? 0);
   renderPool("threat", state.threat ?? 0);
   document.querySelectorAll('[data-pool="threat"]').forEach((b) => { b.disabled = role !== "GM"; });
+  applyRushed();
+  renderNextRoundLabel();
 
-  const merged = [...state.log, ...hiddenLog].sort((a, b) => b.t - a.t);
+  // 1.5. The GM's own lines from the GM tools. Each SHADOWS the public line it belongs
+  // to — "Threat spent" becomes "Reveal: the ally is the traitor" on the GM's screen —
+  // so the GM reads one line per press rather than two. Players never have these.
+  let gmLog = [];
+  if (role === "GM" && !standalone) gmLog = readGmLog(gmHost.room());
+  const shadowed = new Set(gmLog.map((e) => e.shadows).filter(Boolean));
+  const publicLog = shadowed.size ? state.log.filter((e) => !shadowed.has(e.id)) : state.log;
+  // A private line whose public twin has aged out of the room log is older than anything
+  // the table can see. Kept anyway, but it sorts by its own time like everything else.
+  const merged = [...publicLog, ...hiddenLog, ...gmLog].sort((a, b) => b.t - a.t);
 
   logEl.innerHTML = "";
   if (merged.length === 0) {
@@ -532,6 +644,14 @@ function renderActionEntry(e) {
   lab.className = "entry-label";
   lab.textContent = e.label;
   head.append(lab);
+  if (e.gm) {
+    li.classList.add("is-gm");
+    const tag = document.createElement("span");
+    tag.className = "entry-hidden-tag is-gm";
+    tag.textContent = "Only you";
+    tag.title = "From the GM tools. The table's log shows only the public part of this, if any.";
+    head.append(tag);
+  }
   li.append(head);
 
   if (e.detail) {
@@ -617,16 +737,29 @@ function renderRollEntry(e) {
   test.textContent = `${e.an} ${e.av} (${e.sn} ${e.sv}) · ${e.detail.length}d20`;
   li.append(test);
 
-  const dice = document.createElement("div");
-  dice.className = "dice";
-  for (const d of e.detail) {
-    const b = document.createElement("span");
-    b.className = "die " + d.kind;
-    b.textContent = d.d;
-    b.title = { crit: "Critical (2 successes)", success: "Success", complication: "Complication", fail: "No effect" }[d.kind];
-    dice.append(b);
+  // 1.5. A rerolled roll is drawn as it was FIRST written — the dice and the verdict as
+  // they landed — and beneath that a line per reroll and the new result. Nothing above
+  // the reroll line changes, so the table can read what happened in order.
+  const rerolled = !!(e.o && Array.isArray(e.rr) && e.rr.length);
+  const mine = canReroll(e);
+  const replaced = new Set(rerolled ? e.rr.map((r) => r.i) : []);
+
+  if (rerolled) {
+    li.append(diceRow(e.o.d.map((d, i) => ({ d, kind: classifyDie(d, e.av, e.sv, e.compAt || COMP_AT_MAX), gone: replaced.has(i) })), null));
+    li.append(summaryLine({ succ: e.o.succ, comp: e.o.comp, pass: e.o.pass, gain: e.o.gain, diff: e.diff }));
+    for (const line of rerollLines(e)) {
+      const rl = document.createElement("div");
+      rl.className = "entry-reroll";
+      rl.textContent = line.text;
+      li.append(rl);
+    }
+    const label = document.createElement("div");
+    label.className = "entry-reroll-label";
+    label.textContent = "New result";
+    li.append(label);
   }
-  li.append(dice);
+
+  li.append(diceRow(e.detail, mine ? e : null));
 
   // 0.9.5. The surplus is claimable from the log rather than only reported there.
   if (e.gain > 0) {
@@ -638,18 +771,45 @@ function renderRollEntry(e) {
     // looked like from a player's seat, so an unstamped roll is open to anyone: the
     // pool is the group's, the claim is one-way and idempotent, and refusing it helps
     // no one.
-    const mine = role === "GM" || !e.by || e.by === myPlayerId;
-    claim.disabled = !!e.claimed || !mine;
+    const claimable = role === "GM" || !e.by || e.by === myPlayerId;
+    claim.disabled = !!e.claimed || !claimable;
     claim.textContent = e.claimed ? `+${e.gain} Momentum taken` : `Add ${e.gain} Momentum`;
     claim.title = e.claimed
       ? "Already added to the group pool."
-      : mine
-        ? "Add this roll's surplus to the group Momentum pool."
+      : claimable
+        ? "Add this roll's surplus to the group Momentum pool. Its dice are locked after that: no more rerolls."
         : "Only the person who rolled, or the GM, can add this.";
     if (!claim.disabled) claim.addEventListener("click", () => claimMomentum(e));
     li.append(claim);
   }
 
+  li.append(summaryLine(e));
+  if (mine) {
+    const hint = freeRerollHint(e);
+    if (hint) li.append(hint);
+  }
+  if (mine && rerollPick.id === e.id) li.append(rerollPanel(e));
+  return li;
+}
+
+// 1.5. A small yellow note under your own roll when a talent or a piece of gear gives
+// you a FREE reroll on it — Tactical Lens on a Fight test, Inspire on the next test after
+// an ally restored your Spirit. Asked for at the table: the free rerolls are the ones
+// people forget they have. Only for the person who made the roll, because nobody else
+// can use it, and gone once it is used or the Momentum is claimed.
+function freeRerollHint(e) {
+  // Only the ones LIKELY to apply: see rerollHintLikely() in dnm.js. The rest are still
+  // offered when a die is picked; they just do not nag.
+  const free = rerollOptions(e, payerFor(e)).filter((o) => o.cost === "free" && o.likely);
+  if (!free.length) return null;
+  const hint = document.createElement("div");
+  hint.className = "reroll-hint";
+  hint.textContent = `Free reroll: ${free.map((o) => o.label + (o.when ? ` (only when ${o.when})` : "")).join("; ")}. Press a die to use it.`;
+  hint.title = free.map((o) => `${o.label}: ${o.text || ""}`).join("\n");
+  return hint;
+}
+
+function summaryLine(e) {
   const sum = document.createElement("div");
   sum.className = "entry-sum " + (e.pass ? "pass" : "fail");
   const parts = [`${e.succ} ${e.succ === 1 ? "success" : "successes"} vs D${e.diff}`];
@@ -657,9 +817,179 @@ function renderRollEntry(e) {
   if (e.pass && e.gain > 0) parts.push(`+${e.gain} Momentum`);
   if (e.comp > 0) parts.push(`${e.comp} complication${e.comp === 1 ? "" : "s"}`);
   sum.textContent = parts.join(" · ");
-  li.append(sum);
+  return sum;
+}
 
-  return li;
+// The dice of a roll. With `pickFor` set they are buttons: press one to pick it for a
+// reroll, press it again to put it back. A die that a reroll replaced is drawn struck
+// through in the original row, so the row still shows what was rolled.
+function diceRow(detail, pickFor) {
+  const dice = document.createElement("div");
+  dice.className = "dice";
+  detail.forEach((d, i) => {
+    const b = document.createElement(pickFor ? "button" : "span");
+    b.className = "die " + d.kind + (d.gone ? " is-replaced" : "");
+    b.textContent = d.d;
+    const name = { crit: "Critical (2 successes)", success: "Success", complication: "Complication", fail: "No effect" }[d.kind];
+    if (pickFor) {
+      b.type = "button";
+      const picked = rerollPick.id === pickFor.id && rerollPick.dice.has(i);
+      if (picked) b.classList.add("is-picked");
+      b.title = `${name}. ${picked ? "Picked to reroll — press again to put it back." : "Press to pick this die to reroll."}`;
+      b.setAttribute("aria-pressed", picked ? "true" : "false");
+      b.addEventListener("click", () => togglePick(pickFor, i));
+    } else {
+      b.title = d.gone ? `${name}. Rerolled — see below.` : name;
+    }
+    dice.append(b);
+  });
+  return dice;
+}
+
+// -------------------------------------------------------------
+// Rerolls (1.5)
+// -------------------------------------------------------------
+// Your own rolls, while their Momentum is unclaimed. The real check is in background.js
+// against the roll's `by`; this one decides whether to draw the buttons at all.
+function canReroll(e) {
+  if (standalone || !e || e.kind === "action" || e.claimed) return false;
+  if (!e.by || e.by !== myPlayerId) return false;
+  return rerollOptions(e, payerFor(e)).length > 0;
+}
+
+// What this roll's reroll would be paid from.
+function payerFor(e) {
+  if (e.src === "pc") {
+    const key = bondNameKey(e.who);
+    for (const { code } of characterTokens(sceneItems)) {
+      const m = readPartyMember(code);
+      if (!m || bondNameKey(m.name) !== key) continue;
+      const inspireAt = Number(m.char?.inspireAt) || 0;
+      return {
+        kind: "pc",
+        spirit: m.spirit ?? 0,
+        sources: m.rerolls || [],
+        inspireAt,
+        firstAfterInspire: inspireAt ? firstRollAfter(key, inspireAt) : null,
+      };
+    }
+    // The character is not on a token in this scene: no Spirit to read, nothing to pay
+    // the reroll from. Said in the panel rather than silently offering nothing.
+    return { kind: "none" };
+  }
+  if ((e.src === "npc" || e.src === "gm") && role === "GM") {
+    const f = e.nid ? readFight(gmHost.room()).find((x) => x.npcId === e.nid && x.pt > 0) : null;
+    return { kind: "gm", personalThreat: f ? f.pt : 0, fightRow: f ? f.rowId : null };
+  }
+  return { kind: "none" };
+}
+
+// Inspire is good for the character's NEXT Skill Test: the first roll in the log by that
+// character after the ally restored their Spirit.
+function firstRollAfter(nameKey, at) {
+  const rolls = [...state.log, ...hiddenLog]
+    .filter((x) => x && x.kind !== "action" && bondNameKey(x.who) === nameKey && Number(x.t) > at)
+    .sort((a, b) => a.t - b.t);
+  return rolls.length ? rolls[0].id : null;
+}
+
+function togglePick(e, i) {
+  disarmReroll();
+  if (rerollPick.id !== e.id) rerollPick = { id: e.id, dice: new Set() };
+  if (rerollPick.dice.has(i)) rerollPick.dice.delete(i);
+  else rerollPick.dice.add(i);
+  if (!rerollPick.dice.size) rerollPick = { id: null, dice: new Set() };
+  render();
+}
+
+function disarmReroll() {
+  rerollArmed = null;
+  if (rerollTimer) { clearTimeout(rerollTimer); rerollTimer = null; }
+}
+
+// The choices for the picked dice. Each is a button that asks first, like every other
+// button that spends something. One that cannot take this many dice says why rather than
+// disappearing, so a player picking two dice learns that only Mobile rerolls two.
+function rerollPanel(e) {
+  const box = document.createElement("div");
+  box.className = "reroll-panel";
+  const n = rerollPick.dice.size;
+  const head = document.createElement("div");
+  head.className = "reroll-head";
+  head.textContent = `Reroll ${n} ${n === 1 ? "die" : "dice"}:`;
+  box.append(head);
+  const payer = payerFor(e);
+  const opts = rerollOptions(e, payer);
+  for (const o of opts) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "gm-btn reroll-opt" + (o.cost === "free" ? " is-free" : "");
+    const key = `${e.id}:${o.how}`;
+    const tooMany = n > o.max;
+    b.disabled = tooMany;
+    b.textContent = rerollArmed === key ? `Confirm: ${o.cost}?` : `${o.label}${o.cost === "free" ? " (free)" : ""}`;
+    if (rerollArmed === key) b.classList.add("armed");
+    const why = [o.text, o.when ? `Only when: ${o.when}.` : "", o.note,
+      tooMany ? `This rerolls ${o.max === 1 ? "one die" : "two dice"} — pick ${o.max === 1 ? "one" : "fewer"}.` : ""].filter(Boolean).join(" ");
+    b.title = why || `Reroll for ${o.cost}.`;
+    b.addEventListener("click", () => {
+      if (rerollArmed !== key) {
+        rerollArmed = key;
+        if (rerollTimer) clearTimeout(rerollTimer);
+        rerollTimer = setTimeout(() => { disarmReroll(); render(); }, 4000);
+        render();
+        return;
+      }
+      disarmReroll();
+      doReroll(e, o, payer);
+    });
+    box.append(b);
+  }
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => { rerollPick = { id: null, dice: new Set() }; disarmReroll(); render(); });
+  box.append(cancel);
+  return box;
+}
+
+async function doReroll(e, option, payer) {
+  const picked = [...rerollPick.dice].sort((a, b) => a - b);
+  const ev = {
+    type: "reroll",
+    id: e.id,
+    how: option.how,
+    mobile: option.max === 2,
+    pay: "room",
+    g: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+    t: Date.now(),
+    dice: picked.map((i) => ({ i, to: 1 + Math.floor(Math.random() * 20) })),
+  };
+  const problem = rerollProblem(e, ev);
+  if (problem) { setStatus(`Cannot reroll: ${problem}.`); return; }
+  rerollPick = { id: null, dice: new Set() };
+
+  // Paid from the GM's side: the Threat or Personal Threat moves here. A character's
+  // Spirit is NOT taken here — the sheet owns the character and takes it itself when it
+  // sees the reroll in the log (pay: "room"), whether it is open now or next time.
+  if (option.how === "threat") {
+    await announce({ type: "pool", pool: "threat", delta: -1 });
+  } else if (option.how === "personalThreat" && payer.fightRow) {
+    spendPersonalThreat(gmHost, payer.fightRow, -1);
+  }
+
+  if (e.conceal === "secret") {
+    // Never left this browser, so neither does its reroll.
+    const at = hiddenLog.findIndex((x) => x.id === e.id);
+    const next = at >= 0 ? applyReroll(hiddenLog[at], ev) : null;
+    if (next) { hiddenLog[at] = next; saveHiddenLog(); }
+  } else {
+    await announce(ev);
+  }
+  const shown = ev.dice.map((x) => `${e.detail[x.i].d} → ${x.to}`).join(", ");
+  setStatus(`Rerolled ${shown} (${REROLL_LABELS[option.how]}).`);
+  render();
 }
 
 // -------------------------------------------------------------
@@ -760,44 +1090,38 @@ function setConcealMode(mode) {
 // v0.9.0: EPOCH_LABELS moved to dnm.js. The party panel names the same boundaries
 // when it reports what a character is waiting on, and two copies would drift.
 
+// 1.5: the body moved to pushEpochVia() in gmpanel.js, unchanged, so that the GM tools'
+// "End Scene, rushed" and Reversal end a scene exactly the way this button does —
+// including the 1 Momentum the group loses (0.9.5), which is applied on the GM's single
+// press and never on a sheet, or five sheets ending one scene would cost five.
+const REST_KEYS = ["breather", "break", "bed"];
+
 async function pushEpoch(boundary) {
   if (role !== "GM" || !EPOCH_KEYS.includes(boundary)) return;
-  const label = EPOCH_LABELS[boundary] || boundary;
-  await announce({
-    type: "epoch",
-    boundary,
-    entry: {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      t: Date.now(),
-      kind: "action",
-      who: "GM",
-      label,
-      detail: "called for the whole table",
-    },
-  });
-  // 0.9.5. Ending a scene costs the group 1 Momentum, per the rules.
-  //
-  // Applied HERE, on the GM's single press, and deliberately not on the sheet's own
-  // End Scene button. A sheet-side deduction would fire once per character — five
-  // players ending the same scene would cost the table five Momentum. The scene ends
-  // once, so the pool moves once, and the GM is the one who ends it.
-  if (boundary === "scene") {
-    await announce({ type: "pool", pool: "momentum", delta: -1 });
-    await announce({
-      type: "action",
-      entry: {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        t: Date.now(),
-        kind: "action",
-        who: "GM",
-        label: "End Scene",
-        detail: "the group loses 1 Momentum",
-        pool: "momentum",
-        delta: -1,
-      },
+  // Re-checked here rather than trusted from the disabled button: the button can have
+  // been armed a moment before the rush landed.
+  if (REST_KEYS.includes(boundary) && readRushed(state)) {
+    setStatus("The table is rushed. Lift the rush in GM Tools first.");
+    return;
+  }
+  await pushEpochVia(gmHost, boundary);
+  setStatus(`${EPOCH_LABELS[boundary] || boundary} sent to the table.`);
+}
+
+// 1.5. While the GM has rushed the table, the three rests are greyed here exactly as they
+// are on every sheet. See readRushed() in dnm.js.
+function applyRushed() {
+  const rushed = readRushed(state);
+  if (gmPanel) {
+    gmPanel.querySelectorAll("[data-epoch]").forEach((b) => {
+      if (!REST_KEYS.includes(b.dataset.epoch)) return;
+      if (b.classList.contains("armed")) return;
+      b.disabled = rushed;
+      b.title = rushed ? "Rushed: no rest before the next scene (GM Guide p.101). Lift it in GM Tools." : "";
     });
   }
-  setStatus(`${label} sent to the table.`);
+  const badge = el("rushed-badge");
+  if (badge) badge.hidden = !rushed;
 }
 
 // Two-step confirm. A disable-after-click guard stops a double press but does nothing
@@ -902,6 +1226,9 @@ function readPartyMember(code) {
     exhaustion,
     injuries: Array.isArray(r.char?.injuries) ? r.char.injuries.length : 0,
     char: r.char,
+    // 1.5. What this character can reroll with. Written into the snapshot by the creator,
+    // which is the only half that knows the rules; this file only reads it.
+    rerolls: Array.isArray(r.snap?.rerolls) ? r.snap.rerolls.slice(0, 12) : [],
   };
   // Bounded so a long session of edits cannot grow this without limit. Every edit
   // writes a new code, so without a cap this is one entry per keystroke-save.
@@ -1321,21 +1648,13 @@ function sendInit(action, extra = {}) {
 
 // Starting seeds the tracker from the characters already on tokens, because that is
 // the party and typing them in would be the first thing anyone complained about.
+//
+// 1.5: the body moved to startInitiativeVia() in gmpanel.js, because putting an NPC
+// into the fight from the GM tools starts a round the same way. Same keys — the row id
+// is the character's name key, so one character on two tokens is still one row.
 async function startInitiative() {
   if (role !== "GM") return;
-  await sendInit("start");
-  try {
-    const items = await OBR.scene.items.getItems();
-    for (const { code } of characterTokens(items)) {
-      const name = nameForCode(code);
-      if (!name) continue;
-      // Keyed on the name, the same identity the roll merge and the recovery list
-      // use, so one character on two tokens is still one row in the order.
-      await sendInit("add", { id: initRowIdForCharacter(name), name, kind: "pc" });
-    }
-  } catch (err) {
-    console.error("[dnm] could not read the scene to seed initiative", err);
-  }
+  await startInitiativeVia(gmHost);
   setStatus("Initiative started.");
 }
 
@@ -1409,6 +1728,128 @@ function renderInitiativeHeader() {
   }
 }
 
+// 1.5. Next Round adds the round's Threat from the GM's tickers, one log line per ticker,
+// for the round that just ENDED. With nothing ticking it is the single press it always
+// was. With something ticking it asks first, the same two-press arm as the table
+// controls, and says how much — a press that quietly adds Threat is not one press.
+//
+// Fired from here, on the GM's own press, and never from the reducer: the reducer runs
+// on every client, and a tick there would add the Threat once per client.
+let nextArmed = false;
+let nextTimer = null;
+
+function pendingTick() {
+  if (role !== "GM" || standalone) return 0;
+  return tickerTotal(readTickers(gmHost.room()));
+}
+
+function renderNextRoundLabel() {
+  const next = el("init-next");
+  if (!next || nextArmed) return;
+  const n = pendingTick();
+  next.textContent = n ? `Next Round (+${n})` : "Next Round";
+}
+
+function disarmNext() {
+  nextArmed = false;
+  if (nextTimer) { clearTimeout(nextTimer); nextTimer = null; }
+  const next = el("init-next");
+  if (next) next.classList.remove("armed");
+  renderNextRoundLabel();
+}
+
+async function pressNextRound() {
+  if (role !== "GM") return;
+  const n = pendingTick();
+  const next = el("init-next");
+  if (n && !nextArmed) {
+    nextArmed = true;
+    next.textContent = `Confirm +${n} Threat?`;
+    next.classList.add("armed");
+    nextTimer = setTimeout(disarmNext, 4000);
+    return;
+  }
+  const init = readInitiative(state);
+  const ended = init ? init.round : 0;
+  disarmNext();
+  next.disabled = true;
+  try {
+    await sendInit("next");
+    if (n) {
+      const lines = await tickRound(gmHost, ended);
+      setStatus(`Round ${ended} ended: +${n} Threat from ${lines} ticker${lines === 1 ? "" : "s"}.`);
+    }
+  } finally {
+    setTimeout(() => { next.disabled = false; }, 600);
+  }
+}
+
+// 1.5. The GM tools, in the roller. Mounted once the client knows it is the GM, and
+// replaced by a one-line placeholder while they are popped out into their own panel.
+function applyGmTools() {
+  const box = el("gm-tools");
+  if (!box) return;
+  const gm = role === "GM" && !standalone;
+  box.hidden = !gm;
+  if (!gm) {
+    // Emptied, not just hidden: a GM demoted mid-session should not keep the roster
+    // sitting in the page behind a hidden attribute.
+    if (gmTools) gmTools.destroy();
+    box.textContent = "";
+    gmTools = null;
+    return;
+  }
+  const popped = isPoppedOut();
+  box.classList.toggle("is-popped", popped);
+  if (popped) {
+    if (gmTools) gmTools.destroy();
+    gmTools = null;
+    // The pop-out's heartbeat lands here every two seconds. Rebuilding the placeholder
+    // each time could swallow a click on Bring back mid-press, so it is built once.
+    if (box.querySelector(".gmt-back")) return;
+    box.textContent = "";
+    const head = document.createElement("div");
+    head.className = "gm-panel-head";
+    const h2 = document.createElement("h2");
+    h2.textContent = "GM Tools";
+    const note = document.createElement("span");
+    note.className = "gm-note";
+    note.textContent = "Open in their own panel.";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "ghost gmt-back";
+    back.textContent = "Bring back";
+    back.title = "Close the popped-out GM tools and show them here again";
+    back.addEventListener("click", async () => {
+      markPopped(false);
+      try { await OBR.popover.close(GM_POPOVER_ID); } catch (err) { /* already closed */ }
+      applyGmTools();
+    });
+    head.append(h2, note, back);
+    box.append(head);
+    return;
+  }
+  if (!gmTools || !box.querySelector(".gmt-head")) {
+    gmTools = mountGmPanel(box, gmHost, {
+      mode: "inline",
+      onPopOut: async () => {
+        try {
+          // Marked BEFORE the open resolves, so this panel folds away at once rather than
+          // drawing the same tools twice for the length of the round trip.
+          markPopped(true);
+          applyGmTools();
+          await openGmPopover(OBR, safeStorage());
+        } catch (err) {
+          markPopped(false);
+          applyGmTools();
+          setStatus("Could not open the GM panel.");
+          console.error("[dnm] GM panel open failed", err);
+        }
+      },
+    });
+  }
+}
+
 function wirePartyShare() {
   const share = el("party-share");
   if (!share) return;
@@ -1422,7 +1863,7 @@ function wireInitiative() {
   const start = el("init-start");
   if (start) start.addEventListener("click", startInitiative);
   const next = el("init-next");
-  if (next) next.addEventListener("click", () => sendInit("next"));
+  if (next) next.addEventListener("click", pressNextRound);
   const end = el("init-end");
   if (end) {
     end.addEventListener("click", () => {
@@ -1431,7 +1872,10 @@ function wireInitiative() {
       // inherit the last one's name.
       const storage = safeStorage();
       if (storage) { try { storage.removeItem(hiddenNamesKey()); } catch (err) { /* blocked */ } }
+      // 1.5. The GM tools' fight list ends with the round.
+      endFight(gmHost.room());
       sendInit("end");
+      if (gmTools) gmTools.refresh();
     });
   }
   const add = el("init-add");
@@ -1754,6 +2198,8 @@ async function startInOwlbear() {
 
   await load();
   render();
+  applyGmTools();
+  wireGmToolsSync();
 
   // v0.9.0 fix: the selection was only ever read inside player.onChange, so opening
   // the popover with a token already selected showed no character until you clicked
@@ -1765,7 +2211,7 @@ async function startInOwlbear() {
   // Seeded from a real read rather than waiting for a change: the drawer is
   // usually opened BECAUSE a token has just gone, and the change that lost it
   // happened while this page was not running.
-  OBR.scene.items.getItems().then((items) => renderRecovery(items)).catch(() => renderRecovery([]));
+  OBR.scene.items.getItems().then((items) => { sceneItems = items || []; renderRecovery(items); render(); }).catch(() => renderRecovery([]));
 
   // onChange fires when the selection changes, which is how the popover
   // learns which character you are pointing at.
@@ -1782,6 +2228,7 @@ async function startInOwlbear() {
     refreshParty();
     refreshHasGM();
     render();
+    applyGmTools();
   });
 
   // 0.9.10. Someone else being promoted or leaving changes whether the room has a GM,
@@ -1792,7 +2239,9 @@ async function startInOwlbear() {
   // precisely because of this: a move changes no code and no epoch, so it costs a
   // string comparison and returns.
   OBR.scene.items.onChange((items) => {
+    sceneItems = items || [];
     refreshParty(items);
+    if (gmTools) gmTools.sceneChanged();
     // Not signature-guarded the way refreshParty() is: the recovery list changes
     // when a token appears as well as when one goes, and an appearing token is
     // exactly the case that must remove a row.
@@ -1836,10 +2285,31 @@ async function startInOwlbear() {
     // real. Settled before the render, or the display would add it on twice.
     poolBatch.settle();
     render();
+    if (gmTools) gmTools.refresh();
     // The room's epochs are half of every party row's verdict, so a boundary press
     // moves every character from caught up to behind at once.
     refreshParty();
   });
+}
+
+// 1.5. The roller and the popped-out GM panel share an origin and so localStorage. A
+// write in the other frame arrives here as a `storage` event — the GM's log, a ticker, a
+// fight row — and the pop-out's heartbeat going stale is how a closed or reloaded
+// pop-out hands the tools back to this panel.
+let poppedWas = false;
+function wireGmToolsSync() {
+  window.addEventListener("storage", (e) => {
+    if (!e.key || !e.key.startsWith(ID) || role !== "GM") return;
+    if (e.key === GM_KEYS.popped) { applyGmTools(); return; }
+    render();
+    if (gmTools) gmTools.refresh();
+  });
+  poppedWas = isPoppedOut();
+  setInterval(() => {
+    if (role !== "GM") return;
+    const now = isPoppedOut();
+    if (now !== poppedWas) { poppedWas = now; applyGmTools(); }
+  }, 3000);
 }
 
 // -------------------------------------------------------------

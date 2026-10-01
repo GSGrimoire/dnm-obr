@@ -5,6 +5,9 @@
 
 export const ID = "com.thuknights.dnm-obr";
 export const CHAR_KEY = `${ID}/char`;
+// 1.5. An adversary attached to a token. Holds an OPAQUE roster id and nothing else —
+// see npcTokenRef() in gmrules.js for why the name and the stats never go on the token.
+export const NPC_KEY = `${ID}/npc`;
 
 // -------------------------------------------------------------
 // The docked sheet (1.0, regrid 1.1)
@@ -297,11 +300,55 @@ export function writeDock(storage, dock) {
   return d;
 }
 
+// -------------------------------------------------------------
+// The GM panel's own dock (1.5)
+// -------------------------------------------------------------
+// The GM tools pop out the same way the sheet docks: a popover pinned to one of the nine
+// anchors, sized per anchor, zoomable. Everything about the geometry is the sheet's —
+// sheetPopover() is reused whole and only the id is swapped — because the constraint
+// that shaped it (size is live, position costs a reopen) is Owlbear's, not the sheet's.
+//
+// Two things differ and both are deliberate:
+//
+//   ITS OWN ID. The sheet and the GM panel are open at the same time; one id would make
+//   opening either close the other.
+//   ITS OWN STORAGE KEY, defaulting to the LEFT. The sheet defaults to the right, and a GM
+//   who moves one should not find the other has followed it there.
+//
+// Deliberately NOT inside the block the creator copies. The creator never opens this
+// panel, and dock.test.mjs compares the copied helpers one for one.
+export const GM_POPOVER_ID = `${ID}/gm-panel`;
+export const GM_DOCK_KEY = `${ID}/gm-dock`;
+export const GM_PANEL_PATH = "gm.html";
+
+export function readGmDock(storage) {
+  try {
+    const raw = storage && storage.getItem(GM_DOCK_KEY);
+    return clampDock(raw ? JSON.parse(raw) : { anchor: "left" });
+  } catch (err) {
+    return clampDock({ anchor: "left" });
+  }
+}
+
+export function writeGmDock(storage, dock) {
+  const d = clampDock(dock);
+  try {
+    if (storage) storage.setItem(GM_DOCK_KEY, JSON.stringify(d));
+  } catch (err) {
+    /* the dock just does not persist */
+  }
+  return d;
+}
+
+export function gmPopover({ url, dock, viewport }) {
+  return { ...sheetPopover({ url, dock, viewport }), id: GM_POPOVER_ID };
+}
+
 // The extension version in a place JavaScript can read. Its only consumer is
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.4C";
+export const EXT_VERSION = "1.5";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
@@ -316,8 +363,10 @@ export const CHANNEL = `${ID}/events`;
 // v4 (extension 0.9.6): bonds added — a short queue of pending bond effects waiting
 // for the sheet they belong to. Same defaulting rule again: a room written before
 // 0.9.6 has no bonds key, and a reader must treat that as an empty queue.
+// v6 (extension 1.5): rushed added. Same defaulting rule as every key before it — a room
+// written before 1.5 has none, and a reader must treat that as "not rushed".
 export const EMPTY_STATE = {
-  v: 5, momentum: 0, threat: 0, log: [],
+  v: 6, momentum: 0, threat: 0, log: [],
   epochs: { scene: 0, session: 0, adventure: 0, breather: 0, break: 0, bed: 0 },
   compAt: 20,
   bonds: [],
@@ -328,7 +377,39 @@ export const EMPTY_STATE = {
   // asked for; the alternative would have been to keep the old GM-only behaviour and
   // make the GM find a switch to get what they said they wanted.
   partyShared: true,
+  // 1.5. The GM spent 2 Threat to deny the table its rest between scenes. Holds the
+  // scene epoch it was set in; see readRushed().
+  rushed: null,
 };
+
+// -------------------------------------------------------------
+// Rushed (1.5)
+// -------------------------------------------------------------
+// GM Guide p.101: "If the next scene is only a short time later, with no opportunity to
+// rest between them ... the GM may spend 2 Threat to reflect this, preventing the players
+// from taking this rest."
+//
+// WHY IT STORES A SCENE NUMBER RATHER THAN A FLAG. A flag needs someone to clear it, and
+// every clearing rule tried on paper was wrong for one order of presses or the other.
+// The press is "End Scene, rushed" — one action that ends the scene, pays the 2 Threat
+// and records the scene epoch it produced. The table is rushed for as long as the room is
+// still in THAT scene, and the next End Scene lifts it with nothing to remember. The GM
+// can also lift it by hand.
+//
+// It blocks Break and Bed as well as the Breather. The rule names the Breather because it
+// is the rest a table normally expects; with no time for five minutes there is no time
+// for a night's sleep either. Decided with the table, not inferred.
+//
+// It is a reminder, not a lock. Each sheet greys its own rest buttons, which is code
+// running in the player's own tab — the same honesty `mayMarkRow()` is written with. A
+// rest taken anyway still lands in the shared log.
+export function readRushed(state) {
+  const raw = state && state.rushed;
+  if (!raw || typeof raw !== "object") return false;
+  const at = Math.round(Number(raw.scene));
+  if (!Number.isFinite(at)) return false;
+  return at === readEpochs(state).scene;
+}
 
 // -------------------------------------------------------------
 // Initiative (1.4)
@@ -684,6 +765,13 @@ export function sanitizeEntry(entry) {
     // string would fall through canRevealConcealed() as "not concealed".
     conceal: entry.conceal === "hidden" || entry.conceal === "secret" ? entry.conceal : null,
     by: cleanText(entry.by, FIELD_LIMITS.id) || null,
+    // 1.5. Rerolls. `o` is the roll as first written, `rr` what was rerolled since; both
+    // rendered, so both clamped. `src` says what a reroll is paid from — a character's
+    // Spirit, or the GM's Threat — and `nid` names the GM's NPC (an opaque roster id).
+    ...(Array.isArray(entry.rr) && entry.rr.length ? { rr: entry.rr.slice(0, MAX_REROLL_RECORDS).map(cleanRerollRecord).filter(Boolean) } : {}),
+    ...(cleanOriginal(entry.o) ? { o: cleanOriginal(entry.o) } : {}),
+    ...(entry.src === "pc" || entry.src === "npc" || entry.src === "gm" ? { src: entry.src } : {}),
+    ...(entry.nid ? { nid: cleanText(entry.nid, FIELD_LIMITS.id) } : {}),
   };
 }
 
@@ -753,7 +841,25 @@ export const BOND_EFFECT_TTL_MS = 6 * 60 * 60 * 1000;
 // 0.9.8 adds "drive": the Maverick temperament's "when the GM spends 3 or more Threat
 // at once, regain 1 Spirit". It travels the same queue as the two bonds because it has
 // the same problem — it pays out on sheets that are shut.
-const BOND_KINDS = new Set(["rivalry", "grant", "drive"]);
+//
+// 1.5 adds two more, both GM-only and both for the same reason — they pay out on sheets
+// that are shut:
+//
+//   ADVERSITY  GM Guide p.125: "Characters gain growth when they face adversity, in any
+//              situation where you spend three or more Threat in one go." One Growth to
+//              each character it names. Sent from the same place the Maverick drive is,
+//              because it reads the same spend.
+//   REVERSAL   GM Guide p.115: "let each of the PCs recover half their maximum Spirit when
+//              the scene ends." Only the sheet knows its own maximum, so the queue carries
+//              no amount — each sheet works out its own half.
+//
+// Both carry `targets`: the names of the characters on tokens in the scene when the GM
+// pressed. A character in another scene, or attached to nobody, is not facing this
+// adversity. An effect with no targets reaches every sheet, which is what the creator's
+// own sender does — it cannot read the scene.
+const BOND_KINDS = new Set(["rivalry", "grant", "drive", "adversity", "reversal"]);
+const GM_BOND_KINDS = new Set(["drive", "adversity", "reversal"]);
+export const MAX_EFFECT_TARGETS = 8;
 
 // The threshold in the Maverick drive's own text. Below 0.9.7 this was undetectable:
 // a GM spending 3 pressed - three times and it arrived as three spends of 1, so
@@ -788,6 +894,19 @@ export function sanitizeBondEffect(effect) {
   };
   if (effect.kind === "rivalry") return base;
 
+  if (effect.kind === "adversity" || effect.kind === "reversal") {
+    const targets = (Array.isArray(effect.targets) ? effect.targets : [])
+      .slice(0, MAX_EFFECT_TARGETS)
+      .map((n) => cleanText(n, FIELD_LIMITS.who))
+      .filter((n) => n.trim());
+    return {
+      ...base,
+      targets,
+      // The size of the spend, for the recipient's log line. Reversal carries none.
+      amount: Math.max(0, Math.min(999, Math.round(Number(effect.amount) || 0))),
+    };
+  }
+
   if (effect.kind === "drive") {
     // No target: like a rivalry, every sheet decides for itself whether it is owed —
     // here by reading its own temperament rather than its own bond list. `amount` is
@@ -803,6 +922,10 @@ export function sanitizeBondEffect(effect) {
   const amount = Math.round(Number(effect.amount) || 0);
   return {
     ...base,
+    // 1.5. Inspire: "When you spend one or more Momentum to restore an ally's Spirit,
+    // that ally may re-roll 1d20 on their next Skill Test for free." Carried on the grant
+    // so the ally's sheet can remember it.
+    ...(effect.inspire ? { inspire: true } : {}),
     target: cleanText(effect.target, FIELD_LIMITS.who),
     // Second Wind restores at most 3, plus at most 1 from a supportive bond. Four is
     // the ceiling the rules allow and the reducer is where it is worth enforcing,
@@ -917,6 +1040,196 @@ export function createPoolBatcher(send, opts = {}) {
 }
 
 // -------------------------------------------------------------
+// Rerolls (1.5)
+// -------------------------------------------------------------
+// "Spend Spirit to buy up to three additional d20s before a Skill Test, reroll one d20
+// after rolling, or avoid an Injury" — the creator's own Spirit text. Decided with the
+// table:
+//
+//   * You reroll YOUR OWN rolls. GM and players alike; nobody rerolls someone else's.
+//     background.js checks the sender against the roll's `by` — see applyEvent().
+//   * ONE paid reroll per roll. Spirit for a character; for the GM's own rolls, 1 Threat
+//     or 1 Personal Threat (adversaries spend Threat the way players spend Momentum,
+//     GM Guide p.113, and Personal Threat is "a lot like the Spirit pool", p.113).
+//   * Once the roll's Momentum has been claimed its dice are LOCKED.
+//   * Free rerolls from talents and gear come ON TOP of the paid one, each once per roll
+//     (Tool Rig: once per die bought beyond the base two).
+//
+// The original result is never overwritten. `o` keeps the dice and verdict as first
+// written, and each reroll appends to `rr`, so the log shows the roll as it landed and,
+// beneath it, "Reroll 17 → 4" and the new result.
+export const REROLL_PAID = ["spirit", "threat", "personalThreat"];
+export const REROLL_FREE = ["tacticalLens", "supplyAndDemand", "evade", "extraEffort", "toolRig", "inspire"];
+export const REROLL_HOWS = new Set([...REROLL_PAID, ...REROLL_FREE]);
+export const MAX_REROLL_RECORDS = 10;
+export const REROLL_LABELS = {
+  spirit: "1 Spirit", threat: "1 Threat", personalThreat: "1 Personal Threat",
+  tacticalLens: "Tactical Lens", supplyAndDemand: "Supply and Demand", evade: "Evade",
+  extraEffort: "Extra Effort", toolRig: "Tool Rig", inspire: "Inspire",
+};
+
+// Base dice in a Skill Test. Anything beyond was bought, which is what Tool Rig counts.
+const BASE_DICE = 2;
+
+function cleanRerollRecord(r) {
+  if (!r || typeof r !== "object") return null;
+  const how = REROLL_HOWS.has(r.how) ? r.how : null;
+  if (!how) return null;
+  return {
+    i: Math.max(0, Math.min(FIELD_LIMITS.dice - 1, Math.round(Number(r.i) || 0))),
+    from: Math.max(1, Math.min(20, Math.round(Number(r.from) || 1))),
+    to: Math.max(1, Math.min(20, Math.round(Number(r.to) || 1))),
+    how,
+    // "sheet" when the sheet already took the Spirit; "room" when the roller asks the
+    // character's sheet to take it. Only "room" is collected, or it would be paid twice.
+    pay: r.pay === "sheet" ? "sheet" : "room",
+    g: cleanText(r.g, 20),
+    t: Number.isFinite(Number(r.t)) ? Number(r.t) : 0,
+  };
+}
+
+function cleanOriginal(o) {
+  if (!o || typeof o !== "object") return null;
+  const d = (Array.isArray(o.d) ? o.d : []).slice(0, FIELD_LIMITS.dice).map((n) => Math.max(1, Math.min(20, Math.round(Number(n) || 1))));
+  if (!d.length) return null;
+  return { d, succ: cleanCount(o.succ), comp: cleanCount(o.comp), pass: !!o.pass, gain: cleanCount(o.gain) };
+}
+
+// Whether `ev` may be applied to `entry`, and why not. Pure, so the reducer, the roller's
+// buttons and the tests ask the same question.
+export function rerollProblem(entry, ev) {
+  if (!entry || entry.kind === "action" || !Array.isArray(entry.detail) || !entry.detail.length) return "not a roll";
+  if (entry.claimed) return "its Momentum has been taken, so its dice are locked";
+  const how = ev && ev.how;
+  if (!REROLL_HOWS.has(how)) return "unknown reroll";
+  const dice = Array.isArray(ev.dice) ? ev.dice : [];
+  if (!dice.length) return "no dice chosen";
+  const idx = dice.map((x) => Math.round(Number(x && x.i)));
+  if (idx.some((i) => !Number.isInteger(i) || i < 0 || i >= entry.detail.length)) return "no such die";
+  if (new Set(idx).size !== idx.length) return "the same die twice";
+  if (dice.some((x) => !(Number(x.to) >= 1 && Number(x.to) <= 20))) return "not a d20";
+  const done = Array.isArray(entry.rr) ? entry.rr : [];
+  if (done.length + dice.length > MAX_REROLL_RECORDS) return "too many rerolls";
+  if (REROLL_PAID.includes(how)) {
+    if (done.some((r) => REROLL_PAID.includes(r.how))) return "it has already had its paid reroll";
+    // Mobile: "each Spirit spent lets you re-roll two d20s instead of one" — on a Move
+    // test only, and only the Spirit reroll.
+    const max = how === "spirit" && ev.mobile && /^move$/i.test(String(entry.sn || "")) ? 2 : 1;
+    if (dice.length > max) return max === 2 ? "Mobile rerolls two dice at most" : "one die per reroll";
+    return null;
+  }
+  if (dice.length !== 1) return "one die per reroll";
+  if (how === "toolRig") {
+    const bought = Math.max(0, entry.detail.length - BASE_DICE);
+    if (done.filter((r) => r.how === "toolRig").length >= bought) return "Tool Rig rerolls one die per die bought";
+    return null;
+  }
+  if (done.some((r) => r.how === how)) return `${REROLL_LABELS[how]} has already been used on it`;
+  return null;
+}
+
+// Returns a NEW entry with the reroll applied, or null when it is not allowed. The dice
+// are re-judged against the attribute, skill, Difficulty and Complication threshold the
+// roll was MADE with, so a reroll never quietly applies a threshold the GM changed since.
+export function applyReroll(entry, ev) {
+  if (rerollProblem(entry, ev)) return null;
+  const values = entry.detail.map((x) => Math.max(1, Math.min(20, Math.round(Number(x && x.d) || 1))));
+  const original = entry.o || {
+    d: values.slice(), succ: cleanCount(entry.succ), comp: cleanCount(entry.comp),
+    pass: !!entry.pass, gain: cleanCount(entry.gain),
+  };
+  const t = Number.isFinite(Number(ev.t)) ? Number(ev.t) : Date.now();
+  const group = cleanText(ev.g, 20) || String(t);
+  const records = [];
+  for (const x of ev.dice) {
+    const i = Math.round(Number(x.i));
+    const to = Math.max(1, Math.min(20, Math.round(Number(x.to))));
+    records.push({ i, from: values[i], to, how: ev.how, pay: ev.pay === "sheet" ? "sheet" : "room", g: group, t });
+    values[i] = to;
+  }
+  const r = resolveRoll(values, cleanCount(entry.av), cleanCount(entry.sv), cleanCount(entry.diff), cleanCount(entry.compAt) || COMP_AT_MAX);
+  return {
+    ...entry,
+    detail: r.detail,
+    succ: r.successes, comp: r.complications, pass: r.passed, gain: r.momentumGained,
+    o: original,
+    rr: [...(Array.isArray(entry.rr) ? entry.rr : []), ...records],
+  };
+}
+
+// The reroll lines for an entry, grouped by press: one line per reroll event, in order.
+export function rerollLines(entry) {
+  const groups = [];
+  for (const r of Array.isArray(entry && entry.rr) ? entry.rr : []) {
+    const last = groups[groups.length - 1];
+    if (last && last.g === r.g) last.dice.push(r);
+    else groups.push({ g: r.g, how: r.how, dice: [r] });
+  }
+  return groups.map((grp) => ({
+    how: grp.how,
+    text: `Reroll ${grp.dice.map((d) => `${d.from} → ${d.to}`).join(", ")} (${REROLL_LABELS[grp.how] || grp.how}${REROLL_FREE.includes(grp.how) ? ", free" : ""})`,
+  }));
+}
+
+// What a reroll of `entry` could be paid with, for the person who made it. `who` says
+// what they can pay from:
+//
+//   { kind: "pc", spirit, sources, inspireAt, firstAfterInspire }   a character
+//   { kind: "gm", threat, personalThreat }                          the GM's own roll
+//   { kind: "none" }                                                nothing to pay with
+//
+// `sources` is the list the creator writes into the character's snapshot (`rerolls`):
+// the free rerolls and modifiers that character actually has. Conditions the sheet
+// cannot see — "when aiming", "a trading test" — come back as `when`, and the person
+// confirms them; the free reroll is theirs to claim honestly.
+// Whether a free reroll is LIKELY to apply, which decides whether the yellow reminder is
+// drawn — never whether the reroll is allowed. Asked for after the first playtest: a hint
+// on every Fight roll for a Tactical Lens, or on a roll where every die already
+// succeeded, is noise. So a hint needs a die worth rerolling (a failure or a
+// Complication), and a source may narrow it further with `hintSkills` (Supply and Demand
+// on Talk; Evade on Fight or Move) or `hintMinDice` (Extra Effort and Tool Rig need dice
+// bought beyond the base two). The creator writes both into the snapshot.
+export function rerollHintLikely(entry, src) {
+  const detail = Array.isArray(entry && entry.detail) ? entry.detail : [];
+  if (!detail.some((x) => x && (x.kind === "fail" || x.kind === "complication"))) return false;
+  const skill = String(entry.sn || "").toLowerCase();
+  if (src && Array.isArray(src.hintSkills) && src.hintSkills.length && !src.hintSkills.includes(skill)) return false;
+  if (src && Number(src.hintMinDice) > 0 && detail.length < Number(src.hintMinDice)) return false;
+  return true;
+}
+
+export function rerollOptions(entry, who = {}) {
+  if (!entry || entry.kind === "action" || entry.claimed) return [];
+  const out = [];
+  const attr = String(entry.an || "").toLowerCase();
+  const skill = String(entry.sn || "").toLowerCase();
+  const fits = (src) => (!src.attrs || !src.attrs.length || src.attrs.includes(attr))
+    && (!src.skills || !src.skills.length || src.skills.includes(skill));
+  const offer = (how, extra) => {
+    if (!rerollProblem(entry, { how, dice: [{ i: 0, to: 1 }], mobile: extra.max === 2 })) out.push({ how, label: REROLL_LABELS[how], ...extra });
+  };
+  if (who.kind === "pc") {
+    const sources = Array.isArray(who.sources) ? who.sources : [];
+    const mobile = sources.find((x) => x && x.id === "mobile" && fits(x));
+    if ((who.spirit ?? 0) >= 1) {
+      offer("spirit", { max: mobile ? 2 : 1, cost: "1 Spirit", note: mobile ? "Mobile: this Spirit rerolls two dice" : "" });
+    }
+    for (const src of sources) {
+      if (!src || !REROLL_FREE.includes(src.id) || src.id === "inspire") continue;
+      if (!fits(src)) continue;
+      offer(src.id, { max: 1, cost: "free", when: src.when || "", text: src.text || "", likely: rerollHintLikely(entry, src) });
+    }
+    if (who.inspireAt && who.firstAfterInspire === entry.id) {
+      offer("inspire", { max: 1, cost: "free", when: "", likely: rerollHintLikely(entry, null), text: "An ally with Inspire restored your Spirit: re-roll 1d20 on your next Skill Test for free." });
+    }
+  } else if (who.kind === "gm") {
+    if ((who.personalThreat ?? 0) >= 1) offer("personalThreat", { max: 1, cost: "1 Personal Threat" });
+    offer("threat", { max: 1, cost: "1 Threat" });
+  }
+  return out;
+}
+
+// -------------------------------------------------------------
 // Which events require the GM (0.9.2)
 // -------------------------------------------------------------
 // Enforced in background.js, which is the only writer of room metadata and therefore
@@ -932,7 +1245,9 @@ export function createPoolBatcher(send, opts = {}) {
 // The creator's own tooltip had it right all along — "Anyone can add; only the GM
 // should spend" — so what is privileged is the DIRECTION, not the pool. A player can
 // pay Threat in and cannot drain it.
-const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt", "partyShared"]);
+// 1.5: "rush" — denying the table its rest reaches every sheet, which is the same reason
+// an epoch is privileged.
+const GM_ONLY_TYPES = new Set(["epoch", "clear", "compAt", "partyShared", "rush"]);
 
 export function isGmOnlyEvent(ev) {
   if (!ev || typeof ev !== "object") return false;
@@ -942,7 +1257,9 @@ export function isGmOnlyEvent(ev) {
   // who already holds the matching bond — a forged drive would reach every Maverick at
   // the table on nobody's authority. It is cheap to put it behind the real check, so
   // it goes behind the real check.
-  if (ev.type === "bond") return ev.effect?.kind === "drive";
+  // 1.5: adversity and reversal join it. Both read "the GM spends", and a forged one
+  // would hand Growth or half a Spirit track to the whole table.
+  if (ev.type === "bond") return GM_BOND_KINDS.has(ev.effect?.kind);
   // 1.4. Running the round is the GM's: starting, ending, adding, removing, ordering
   // and hiding all reach every client and none of them is a thing a player does.
   //
@@ -978,7 +1295,11 @@ export function isGmOnlyEvent(ev) {
 // Roll events carry an id and are deduplicated, so applying one twice is safe.
 // Pool events are deltas and cannot be, which is why clients do not apply them
 // optimistically and instead wait for the GM's metadata update.
-export function applyEvent(state, ev) {
+// `ctx` is passed only by background.js, the one writer: `ctx.sender` is the player id
+// behind the connection that sent the event, which is what lets a reroll be refused when
+// it is not the roller's own. Other callers (the clients' own preview, the tests that
+// exercise the shapes) pass nothing.
+export function applyEvent(state, ev, ctx) {
   const next = { ...EMPTY_STATE, ...state };
   next.log = Array.isArray(next.log) ? next.log.slice() : [];
 
@@ -1059,6 +1380,26 @@ export function applyEvent(state, ev) {
     next.initiative = applyInitiativeAction(readInitiative(next), ev);
   } else if (ev?.type === "partyShared") {
     next.partyShared = !!ev.value;
+  } else if (ev?.type === "reroll" && ev.id) {
+    // 1.5. Your own rolls only. The sender is checked HERE, against the stored roll,
+    // because only the background page knows who really sent the event — a check in the
+    // sender's tab is a courtesy. A roll with no `by` (made before 0.9.4) belongs to
+    // nobody and cannot be rerolled.
+    next.log = next.log.map((e) => {
+      if (e.id !== ev.id) return e;
+      if (ctx && "sender" in ctx && (!e.by || e.by !== ctx.sender)) return e;
+      return applyReroll(e, ev) || e;
+    });
+  } else if (ev?.type === "rush") {
+    // 1.5. Stamped with the scene the room is in NOW, which is why the GM panel sends
+    // this after its End Scene rather than before: the rush covers the scene that
+    // follows the one it ended. See readRushed().
+    next.rushed = ev.value ? { scene: readEpochs(next).scene } : null;
+    const entry = sanitizeEntry(ev.entry);
+    if (entry && !next.log.some((e) => e.id === entry.id)) {
+      next.log.unshift(entry);
+      next.log = next.log.slice(0, MAX_LOG_ENTRIES);
+    }
   } else if (ev?.type === "clear") {
     next.log = [];
   }
@@ -1087,6 +1428,9 @@ export function trimState(state) {
   // opposite position from the documented default.
   next.initiative = readInitiative(next);
   next.partyShared = next.partyShared !== false;
+  // 1.5. Normalised to the one shape readRushed() reads, and dropped once it has lapsed:
+  // a rush from three scenes ago is just bytes.
+  next.rushed = readRushed(next) ? { scene: readEpochs(next).scene } : null;
   // 0.9.6. Pending bond effects are trimmed by age and count here, and then left
   // alone by the loop below. They are a dozen small objects at most, and unlike a log
   // line an undrained one still owes somebody a Spirit — so the log gives way to them
@@ -1573,6 +1917,25 @@ export async function openSheetPopover(obr, itemId, storage) {
   const dock = storage ? readDock(storage) : clampDock(null);
   const url = `${SHEET_URL}?item=${encodeURIComponent(itemId)}`;
   await obr.popover.open(sheetPopover({ url, dock, viewport }));
+}
+
+// 1.5. The GM panel, popped out. Resolved against THIS file rather than a hardcoded
+// host so a staged copy under test opens its own page, not the live one.
+export function gmPanelUrl() {
+  return new URL(GM_PANEL_PATH, import.meta.url).href;
+}
+
+export async function openGmPopover(obr, storage) {
+  let viewport = null;
+  try {
+    const [width, height] = await Promise.all([
+      obr.viewport.getWidth(), obr.viewport.getHeight(),
+    ]);
+    viewport = { width, height };
+  } catch (err) {
+    viewport = null;
+  }
+  await obr.popover.open(gmPopover({ url: gmPanelUrl(), dock: readGmDock(storage), viewport }));
 }
 
 // -------------------------------------------------------------

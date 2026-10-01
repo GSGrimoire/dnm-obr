@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>D&amp;M GM Tools</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Exo+2:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="gm-popover-page">
+
+<!-- 1.5. The GM tools, popped out of the roller into their own docked popover. Placed
+     and sized the way the character sheet is: the position pad moves it (a close and a
+     reopen, because Owlbear has no setPosition), the edges resize it live, and zoom
+     scales what is inside. See gmPopover() in dnm.js. -->
+<div id="gm-bar" class="gm-bar">
+  <div id="gm-dock" class="obr-dock"></div>
+  <button type="button" id="gm-close" class="gm-btn gm-close">Close</button>
+</div>
+<div id="app">
+  <p id="gm-only" class="no-gm" hidden>These tools are for the GM.</p>
+  <section id="gm-tools" class="gm-panel gm-tools"></section>
+  <p id="status" class="status"></p>
+</div>
+
+<script type="module" src="gm.js"></script>
+</body>
+</html>

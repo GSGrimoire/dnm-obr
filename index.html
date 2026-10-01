@@ -47,6 +47,10 @@
   <section id="gm-panel" class="gm-panel" hidden>
     <div class="gm-panel-head">
       <h2>Table Controls</h2>
+      <!-- 1.5. Lit while the GM has rushed the table: the three rests below are greyed
+           until the next End Scene. -->
+      <span id="rushed-badge" class="rushed-badge" hidden
+        title="No rest before the next scene (GM Guide p.101). Lift it in GM Tools.">Rushed</span>
       <span class="gm-badge">GM</span>
     </div>
     <div class="gm-group">
@@ -89,6 +93,11 @@
     <p class="gm-note">Applies to every attached character. A sheet that is closed
       catches up the next time it is opened.</p>
   </section>
+
+  <!-- 1.5. GM Tools: every way the GM gains and spends Threat, round tickers, hazards,
+       starting Threat and the NPC roster. Drawn by gmpanel.js, which draws the same
+       panel in its own docked popover (gm.html) when popped out. GM only. -->
+  <section id="gm-tools" class="gm-panel gm-tools" hidden></section>
 
   <!-- 0.9.0, shared with the table from 1.4, and the initiative tracker folded into
        it in 1.4B. It was a separate panel for one release and printed the same four
