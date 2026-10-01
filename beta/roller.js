@@ -32,9 +32,10 @@ import {
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
   readRushed, NPC_KEY, openGmPopover, GM_POPOVER_ID,
+  rerollOptions, rerollLines, rerollProblem, applyReroll, REROLL_LABELS, classifyDie, bondNameKey,
 } from "./dnm.js";
 import {
-  mountGmPanel, pushEpochVia, startInitiativeVia, tickRound, spendSideEffects,
+  mountGmPanel, pushEpochVia, startInitiativeVia, tickRound, spendSideEffects, readFight, spendPersonalThreat,
   readGmLog, readTickers, isPoppedOut, markPopped, findNpc, GM_KEYS, endFight,
 } from "./gmpanel.js";
 import { tickerTotal, npcRollValues, readNpcTokenRef } from "./gmrules.js";
@@ -61,6 +62,16 @@ let activeChar = null;
 // the stat block comes from this browser's roster, so a player selecting the same token
 // gets nothing — there is nothing on it to read. `mode` picks a Normal NPC's pair.
 let activeNpc = null;
+
+// 1.5. The scene's items, as last seen. A reroll of a character's roll looks the
+// character up here for its Spirit and its free rerolls; asking Owlbear on every render
+// would be a round trip per log entry.
+let sceneItems = [];
+
+// The dice picked for a reroll: one roll at a time, a set of die indices.
+let rerollPick = { id: null, dice: new Set() };
+let rerollArmed = null;
+let rerollTimer = null;
 
 // 1.5. The GM tools, drawn below Table Controls (or popped out into their own panel).
 let gmTools = null;
@@ -194,6 +205,12 @@ async function doRoll() {
     comp: result.complications,
     pass: result.passed,
     gain: result.momentumGained,
+    // 1.5. What a reroll of this roll is paid from: the selected character's Spirit,
+    // the GM's Threat for an NPC (with its roster id, for Personal Threat), or the GM's
+    // Threat for anything else the GM rolls. A player rolling with no character selected
+    // has nothing to pay with and gets no reroll.
+    by: myPlayerId,
+    ...(activeChar ? { src: "pc" } : activeNpc ? { src: "npc", nid: activeNpc.npc.id } : role === "GM" ? { src: "gm" } : {}),
   };
 
   // SECRET: nothing leaves this browser, so no one can tell a roll happened. GM only
@@ -720,16 +737,29 @@ function renderRollEntry(e) {
   test.textContent = `${e.an} ${e.av} (${e.sn} ${e.sv}) · ${e.detail.length}d20`;
   li.append(test);
 
-  const dice = document.createElement("div");
-  dice.className = "dice";
-  for (const d of e.detail) {
-    const b = document.createElement("span");
-    b.className = "die " + d.kind;
-    b.textContent = d.d;
-    b.title = { crit: "Critical (2 successes)", success: "Success", complication: "Complication", fail: "No effect" }[d.kind];
-    dice.append(b);
+  // 1.5. A rerolled roll is drawn as it was FIRST written — the dice and the verdict as
+  // they landed — and beneath that a line per reroll and the new result. Nothing above
+  // the reroll line changes, so the table can read what happened in order.
+  const rerolled = !!(e.o && Array.isArray(e.rr) && e.rr.length);
+  const mine = canReroll(e);
+  const replaced = new Set(rerolled ? e.rr.map((r) => r.i) : []);
+
+  if (rerolled) {
+    li.append(diceRow(e.o.d.map((d, i) => ({ d, kind: classifyDie(d, e.av, e.sv, e.compAt || COMP_AT_MAX), gone: replaced.has(i) })), null));
+    li.append(summaryLine({ succ: e.o.succ, comp: e.o.comp, pass: e.o.pass, gain: e.o.gain, diff: e.diff }));
+    for (const line of rerollLines(e)) {
+      const rl = document.createElement("div");
+      rl.className = "entry-reroll";
+      rl.textContent = line.text;
+      li.append(rl);
+    }
+    const label = document.createElement("div");
+    label.className = "entry-reroll-label";
+    label.textContent = "New result";
+    li.append(label);
   }
-  li.append(dice);
+
+  li.append(diceRow(e.detail, mine ? e : null));
 
   // 0.9.5. The surplus is claimable from the log rather than only reported there.
   if (e.gain > 0) {
@@ -741,18 +771,43 @@ function renderRollEntry(e) {
     // looked like from a player's seat, so an unstamped roll is open to anyone: the
     // pool is the group's, the claim is one-way and idempotent, and refusing it helps
     // no one.
-    const mine = role === "GM" || !e.by || e.by === myPlayerId;
-    claim.disabled = !!e.claimed || !mine;
+    const claimable = role === "GM" || !e.by || e.by === myPlayerId;
+    claim.disabled = !!e.claimed || !claimable;
     claim.textContent = e.claimed ? `+${e.gain} Momentum taken` : `Add ${e.gain} Momentum`;
     claim.title = e.claimed
       ? "Already added to the group pool."
-      : mine
-        ? "Add this roll's surplus to the group Momentum pool."
+      : claimable
+        ? "Add this roll's surplus to the group Momentum pool. Its dice are locked after that: no more rerolls."
         : "Only the person who rolled, or the GM, can add this.";
     if (!claim.disabled) claim.addEventListener("click", () => claimMomentum(e));
     li.append(claim);
   }
 
+  li.append(summaryLine(e));
+  if (mine) {
+    const hint = freeRerollHint(e);
+    if (hint) li.append(hint);
+  }
+  if (mine && rerollPick.id === e.id) li.append(rerollPanel(e));
+  return li;
+}
+
+// 1.5. A small yellow note under your own roll when a talent or a piece of gear gives
+// you a FREE reroll on it — Tactical Lens on a Fight test, Inspire on the next test after
+// an ally restored your Spirit. Asked for at the table: the free rerolls are the ones
+// people forget they have. Only for the person who made the roll, because nobody else
+// can use it, and gone once it is used or the Momentum is claimed.
+function freeRerollHint(e) {
+  const free = rerollOptions(e, payerFor(e)).filter((o) => o.cost === "free");
+  if (!free.length) return null;
+  const hint = document.createElement("div");
+  hint.className = "reroll-hint";
+  hint.textContent = `Free reroll: ${free.map((o) => o.label + (o.when ? ` (only when ${o.when})` : "")).join("; ")}. Press a die to use it.`;
+  hint.title = free.map((o) => `${o.label}: ${o.text || ""}`).join("\n");
+  return hint;
+}
+
+function summaryLine(e) {
   const sum = document.createElement("div");
   sum.className = "entry-sum " + (e.pass ? "pass" : "fail");
   const parts = [`${e.succ} ${e.succ === 1 ? "success" : "successes"} vs D${e.diff}`];
@@ -760,9 +815,179 @@ function renderRollEntry(e) {
   if (e.pass && e.gain > 0) parts.push(`+${e.gain} Momentum`);
   if (e.comp > 0) parts.push(`${e.comp} complication${e.comp === 1 ? "" : "s"}`);
   sum.textContent = parts.join(" · ");
-  li.append(sum);
+  return sum;
+}
 
-  return li;
+// The dice of a roll. With `pickFor` set they are buttons: press one to pick it for a
+// reroll, press it again to put it back. A die that a reroll replaced is drawn struck
+// through in the original row, so the row still shows what was rolled.
+function diceRow(detail, pickFor) {
+  const dice = document.createElement("div");
+  dice.className = "dice";
+  detail.forEach((d, i) => {
+    const b = document.createElement(pickFor ? "button" : "span");
+    b.className = "die " + d.kind + (d.gone ? " is-replaced" : "");
+    b.textContent = d.d;
+    const name = { crit: "Critical (2 successes)", success: "Success", complication: "Complication", fail: "No effect" }[d.kind];
+    if (pickFor) {
+      b.type = "button";
+      const picked = rerollPick.id === pickFor.id && rerollPick.dice.has(i);
+      if (picked) b.classList.add("is-picked");
+      b.title = `${name}. ${picked ? "Picked to reroll — press again to put it back." : "Press to pick this die to reroll."}`;
+      b.setAttribute("aria-pressed", picked ? "true" : "false");
+      b.addEventListener("click", () => togglePick(pickFor, i));
+    } else {
+      b.title = d.gone ? `${name}. Rerolled — see below.` : name;
+    }
+    dice.append(b);
+  });
+  return dice;
+}
+
+// -------------------------------------------------------------
+// Rerolls (1.5)
+// -------------------------------------------------------------
+// Your own rolls, while their Momentum is unclaimed. The real check is in background.js
+// against the roll's `by`; this one decides whether to draw the buttons at all.
+function canReroll(e) {
+  if (standalone || !e || e.kind === "action" || e.claimed) return false;
+  if (!e.by || e.by !== myPlayerId) return false;
+  return rerollOptions(e, payerFor(e)).length > 0;
+}
+
+// What this roll's reroll would be paid from.
+function payerFor(e) {
+  if (e.src === "pc") {
+    const key = bondNameKey(e.who);
+    for (const { code } of characterTokens(sceneItems)) {
+      const m = readPartyMember(code);
+      if (!m || bondNameKey(m.name) !== key) continue;
+      const inspireAt = Number(m.char?.inspireAt) || 0;
+      return {
+        kind: "pc",
+        spirit: m.spirit ?? 0,
+        sources: m.rerolls || [],
+        inspireAt,
+        firstAfterInspire: inspireAt ? firstRollAfter(key, inspireAt) : null,
+      };
+    }
+    // The character is not on a token in this scene: no Spirit to read, nothing to pay
+    // the reroll from. Said in the panel rather than silently offering nothing.
+    return { kind: "none" };
+  }
+  if ((e.src === "npc" || e.src === "gm") && role === "GM") {
+    const f = e.nid ? readFight(gmHost.room()).find((x) => x.npcId === e.nid && x.pt > 0) : null;
+    return { kind: "gm", personalThreat: f ? f.pt : 0, fightRow: f ? f.rowId : null };
+  }
+  return { kind: "none" };
+}
+
+// Inspire is good for the character's NEXT Skill Test: the first roll in the log by that
+// character after the ally restored their Spirit.
+function firstRollAfter(nameKey, at) {
+  const rolls = [...state.log, ...hiddenLog]
+    .filter((x) => x && x.kind !== "action" && bondNameKey(x.who) === nameKey && Number(x.t) > at)
+    .sort((a, b) => a.t - b.t);
+  return rolls.length ? rolls[0].id : null;
+}
+
+function togglePick(e, i) {
+  disarmReroll();
+  if (rerollPick.id !== e.id) rerollPick = { id: e.id, dice: new Set() };
+  if (rerollPick.dice.has(i)) rerollPick.dice.delete(i);
+  else rerollPick.dice.add(i);
+  if (!rerollPick.dice.size) rerollPick = { id: null, dice: new Set() };
+  render();
+}
+
+function disarmReroll() {
+  rerollArmed = null;
+  if (rerollTimer) { clearTimeout(rerollTimer); rerollTimer = null; }
+}
+
+// The choices for the picked dice. Each is a button that asks first, like every other
+// button that spends something. One that cannot take this many dice says why rather than
+// disappearing, so a player picking two dice learns that only Mobile rerolls two.
+function rerollPanel(e) {
+  const box = document.createElement("div");
+  box.className = "reroll-panel";
+  const n = rerollPick.dice.size;
+  const head = document.createElement("div");
+  head.className = "reroll-head";
+  head.textContent = `Reroll ${n} ${n === 1 ? "die" : "dice"}:`;
+  box.append(head);
+  const payer = payerFor(e);
+  const opts = rerollOptions(e, payer);
+  for (const o of opts) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "gm-btn reroll-opt" + (o.cost === "free" ? " is-free" : "");
+    const key = `${e.id}:${o.how}`;
+    const tooMany = n > o.max;
+    b.disabled = tooMany;
+    b.textContent = rerollArmed === key ? `Confirm: ${o.cost}?` : `${o.label}${o.cost === "free" ? " (free)" : ""}`;
+    if (rerollArmed === key) b.classList.add("armed");
+    const why = [o.text, o.when ? `Only when: ${o.when}.` : "", o.note,
+      tooMany ? `This rerolls ${o.max === 1 ? "one die" : "two dice"} — pick ${o.max === 1 ? "one" : "fewer"}.` : ""].filter(Boolean).join(" ");
+    b.title = why || `Reroll for ${o.cost}.`;
+    b.addEventListener("click", () => {
+      if (rerollArmed !== key) {
+        rerollArmed = key;
+        if (rerollTimer) clearTimeout(rerollTimer);
+        rerollTimer = setTimeout(() => { disarmReroll(); render(); }, 4000);
+        render();
+        return;
+      }
+      disarmReroll();
+      doReroll(e, o, payer);
+    });
+    box.append(b);
+  }
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => { rerollPick = { id: null, dice: new Set() }; disarmReroll(); render(); });
+  box.append(cancel);
+  return box;
+}
+
+async function doReroll(e, option, payer) {
+  const picked = [...rerollPick.dice].sort((a, b) => a - b);
+  const ev = {
+    type: "reroll",
+    id: e.id,
+    how: option.how,
+    mobile: option.max === 2,
+    pay: "room",
+    g: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+    t: Date.now(),
+    dice: picked.map((i) => ({ i, to: 1 + Math.floor(Math.random() * 20) })),
+  };
+  const problem = rerollProblem(e, ev);
+  if (problem) { setStatus(`Cannot reroll: ${problem}.`); return; }
+  rerollPick = { id: null, dice: new Set() };
+
+  // Paid from the GM's side: the Threat or Personal Threat moves here. A character's
+  // Spirit is NOT taken here — the sheet owns the character and takes it itself when it
+  // sees the reroll in the log (pay: "room"), whether it is open now or next time.
+  if (option.how === "threat") {
+    await announce({ type: "pool", pool: "threat", delta: -1 });
+  } else if (option.how === "personalThreat" && payer.fightRow) {
+    spendPersonalThreat(gmHost, payer.fightRow, -1);
+  }
+
+  if (e.conceal === "secret") {
+    // Never left this browser, so neither does its reroll.
+    const at = hiddenLog.findIndex((x) => x.id === e.id);
+    const next = at >= 0 ? applyReroll(hiddenLog[at], ev) : null;
+    if (next) { hiddenLog[at] = next; saveHiddenLog(); }
+  } else {
+    await announce(ev);
+  }
+  const shown = ev.dice.map((x) => `${e.detail[x.i].d} → ${x.to}`).join(", ");
+  setStatus(`Rerolled ${shown} (${REROLL_LABELS[option.how]}).`);
+  render();
 }
 
 // -------------------------------------------------------------
@@ -999,6 +1224,9 @@ function readPartyMember(code) {
     exhaustion,
     injuries: Array.isArray(r.char?.injuries) ? r.char.injuries.length : 0,
     char: r.char,
+    // 1.5. What this character can reroll with. Written into the snapshot by the creator,
+    // which is the only half that knows the rules; this file only reads it.
+    rerolls: Array.isArray(r.snap?.rerolls) ? r.snap.rerolls.slice(0, 12) : [],
   };
   // Bounded so a long session of edits cannot grow this without limit. Every edit
   // writes a new code, so without a cap this is one entry per keystroke-save.
@@ -1981,7 +2209,7 @@ async function startInOwlbear() {
   // Seeded from a real read rather than waiting for a change: the drawer is
   // usually opened BECAUSE a token has just gone, and the change that lost it
   // happened while this page was not running.
-  OBR.scene.items.getItems().then((items) => renderRecovery(items)).catch(() => renderRecovery([]));
+  OBR.scene.items.getItems().then((items) => { sceneItems = items || []; renderRecovery(items); render(); }).catch(() => renderRecovery([]));
 
   // onChange fires when the selection changes, which is how the popover
   // learns which character you are pointing at.
@@ -2009,6 +2237,7 @@ async function startInOwlbear() {
   // precisely because of this: a move changes no code and no epoch, so it costs a
   // string comparison and returns.
   OBR.scene.items.onChange((items) => {
+    sceneItems = items || [];
     refreshParty(items);
     if (gmTools) gmTools.sceneChanged();
     // Not signature-guarded the way refreshParty() is: the recovery list changes

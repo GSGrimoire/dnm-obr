@@ -765,6 +765,13 @@ export function sanitizeEntry(entry) {
     // string would fall through canRevealConcealed() as "not concealed".
     conceal: entry.conceal === "hidden" || entry.conceal === "secret" ? entry.conceal : null,
     by: cleanText(entry.by, FIELD_LIMITS.id) || null,
+    // 1.5. Rerolls. `o` is the roll as first written, `rr` what was rerolled since; both
+    // rendered, so both clamped. `src` says what a reroll is paid from — a character's
+    // Spirit, or the GM's Threat — and `nid` names the GM's NPC (an opaque roster id).
+    ...(Array.isArray(entry.rr) && entry.rr.length ? { rr: entry.rr.slice(0, MAX_REROLL_RECORDS).map(cleanRerollRecord).filter(Boolean) } : {}),
+    ...(cleanOriginal(entry.o) ? { o: cleanOriginal(entry.o) } : {}),
+    ...(entry.src === "pc" || entry.src === "npc" || entry.src === "gm" ? { src: entry.src } : {}),
+    ...(entry.nid ? { nid: cleanText(entry.nid, FIELD_LIMITS.id) } : {}),
   };
 }
 
@@ -915,6 +922,10 @@ export function sanitizeBondEffect(effect) {
   const amount = Math.round(Number(effect.amount) || 0);
   return {
     ...base,
+    // 1.5. Inspire: "When you spend one or more Momentum to restore an ally's Spirit,
+    // that ally may re-roll 1d20 on their next Skill Test for free." Carried on the grant
+    // so the ally's sheet can remember it.
+    ...(effect.inspire ? { inspire: true } : {}),
     target: cleanText(effect.target, FIELD_LIMITS.who),
     // Second Wind restores at most 3, plus at most 1 from a supportive bond. Four is
     // the ceiling the rules allow and the reducer is where it is worth enforcing,
@@ -1029,6 +1040,180 @@ export function createPoolBatcher(send, opts = {}) {
 }
 
 // -------------------------------------------------------------
+// Rerolls (1.5)
+// -------------------------------------------------------------
+// "Spend Spirit to buy up to three additional d20s before a Skill Test, reroll one d20
+// after rolling, or avoid an Injury" — the creator's own Spirit text. Decided with the
+// table:
+//
+//   * You reroll YOUR OWN rolls. GM and players alike; nobody rerolls someone else's.
+//     background.js checks the sender against the roll's `by` — see applyEvent().
+//   * ONE paid reroll per roll. Spirit for a character; for the GM's own rolls, 1 Threat
+//     or 1 Personal Threat (adversaries spend Threat the way players spend Momentum,
+//     GM Guide p.113, and Personal Threat is "a lot like the Spirit pool", p.113).
+//   * Once the roll's Momentum has been claimed its dice are LOCKED.
+//   * Free rerolls from talents and gear come ON TOP of the paid one, each once per roll
+//     (Tool Rig: once per die bought beyond the base two).
+//
+// The original result is never overwritten. `o` keeps the dice and verdict as first
+// written, and each reroll appends to `rr`, so the log shows the roll as it landed and,
+// beneath it, "Reroll 17 → 4" and the new result.
+export const REROLL_PAID = ["spirit", "threat", "personalThreat"];
+export const REROLL_FREE = ["tacticalLens", "supplyAndDemand", "evade", "extraEffort", "toolRig", "inspire"];
+export const REROLL_HOWS = new Set([...REROLL_PAID, ...REROLL_FREE]);
+export const MAX_REROLL_RECORDS = 10;
+export const REROLL_LABELS = {
+  spirit: "1 Spirit", threat: "1 Threat", personalThreat: "1 Personal Threat",
+  tacticalLens: "Tactical Lens", supplyAndDemand: "Supply and Demand", evade: "Evade",
+  extraEffort: "Extra Effort", toolRig: "Tool Rig", inspire: "Inspire",
+};
+
+// Base dice in a Skill Test. Anything beyond was bought, which is what Tool Rig counts.
+const BASE_DICE = 2;
+
+function cleanRerollRecord(r) {
+  if (!r || typeof r !== "object") return null;
+  const how = REROLL_HOWS.has(r.how) ? r.how : null;
+  if (!how) return null;
+  return {
+    i: Math.max(0, Math.min(FIELD_LIMITS.dice - 1, Math.round(Number(r.i) || 0))),
+    from: Math.max(1, Math.min(20, Math.round(Number(r.from) || 1))),
+    to: Math.max(1, Math.min(20, Math.round(Number(r.to) || 1))),
+    how,
+    // "sheet" when the sheet already took the Spirit; "room" when the roller asks the
+    // character's sheet to take it. Only "room" is collected, or it would be paid twice.
+    pay: r.pay === "sheet" ? "sheet" : "room",
+    g: cleanText(r.g, 20),
+    t: Number.isFinite(Number(r.t)) ? Number(r.t) : 0,
+  };
+}
+
+function cleanOriginal(o) {
+  if (!o || typeof o !== "object") return null;
+  const d = (Array.isArray(o.d) ? o.d : []).slice(0, FIELD_LIMITS.dice).map((n) => Math.max(1, Math.min(20, Math.round(Number(n) || 1))));
+  if (!d.length) return null;
+  return { d, succ: cleanCount(o.succ), comp: cleanCount(o.comp), pass: !!o.pass, gain: cleanCount(o.gain) };
+}
+
+// Whether `ev` may be applied to `entry`, and why not. Pure, so the reducer, the roller's
+// buttons and the tests ask the same question.
+export function rerollProblem(entry, ev) {
+  if (!entry || entry.kind === "action" || !Array.isArray(entry.detail) || !entry.detail.length) return "not a roll";
+  if (entry.claimed) return "its Momentum has been taken, so its dice are locked";
+  const how = ev && ev.how;
+  if (!REROLL_HOWS.has(how)) return "unknown reroll";
+  const dice = Array.isArray(ev.dice) ? ev.dice : [];
+  if (!dice.length) return "no dice chosen";
+  const idx = dice.map((x) => Math.round(Number(x && x.i)));
+  if (idx.some((i) => !Number.isInteger(i) || i < 0 || i >= entry.detail.length)) return "no such die";
+  if (new Set(idx).size !== idx.length) return "the same die twice";
+  if (dice.some((x) => !(Number(x.to) >= 1 && Number(x.to) <= 20))) return "not a d20";
+  const done = Array.isArray(entry.rr) ? entry.rr : [];
+  if (done.length + dice.length > MAX_REROLL_RECORDS) return "too many rerolls";
+  if (REROLL_PAID.includes(how)) {
+    if (done.some((r) => REROLL_PAID.includes(r.how))) return "it has already had its paid reroll";
+    // Mobile: "each Spirit spent lets you re-roll two d20s instead of one" — on a Move
+    // test only, and only the Spirit reroll.
+    const max = how === "spirit" && ev.mobile && /^move$/i.test(String(entry.sn || "")) ? 2 : 1;
+    if (dice.length > max) return max === 2 ? "Mobile rerolls two dice at most" : "one die per reroll";
+    return null;
+  }
+  if (dice.length !== 1) return "one die per reroll";
+  if (how === "toolRig") {
+    const bought = Math.max(0, entry.detail.length - BASE_DICE);
+    if (done.filter((r) => r.how === "toolRig").length >= bought) return "Tool Rig rerolls one die per die bought";
+    return null;
+  }
+  if (done.some((r) => r.how === how)) return `${REROLL_LABELS[how]} has already been used on it`;
+  return null;
+}
+
+// Returns a NEW entry with the reroll applied, or null when it is not allowed. The dice
+// are re-judged against the attribute, skill, Difficulty and Complication threshold the
+// roll was MADE with, so a reroll never quietly applies a threshold the GM changed since.
+export function applyReroll(entry, ev) {
+  if (rerollProblem(entry, ev)) return null;
+  const values = entry.detail.map((x) => Math.max(1, Math.min(20, Math.round(Number(x && x.d) || 1))));
+  const original = entry.o || {
+    d: values.slice(), succ: cleanCount(entry.succ), comp: cleanCount(entry.comp),
+    pass: !!entry.pass, gain: cleanCount(entry.gain),
+  };
+  const t = Number.isFinite(Number(ev.t)) ? Number(ev.t) : Date.now();
+  const group = cleanText(ev.g, 20) || String(t);
+  const records = [];
+  for (const x of ev.dice) {
+    const i = Math.round(Number(x.i));
+    const to = Math.max(1, Math.min(20, Math.round(Number(x.to))));
+    records.push({ i, from: values[i], to, how: ev.how, pay: ev.pay === "sheet" ? "sheet" : "room", g: group, t });
+    values[i] = to;
+  }
+  const r = resolveRoll(values, cleanCount(entry.av), cleanCount(entry.sv), cleanCount(entry.diff), cleanCount(entry.compAt) || COMP_AT_MAX);
+  return {
+    ...entry,
+    detail: r.detail,
+    succ: r.successes, comp: r.complications, pass: r.passed, gain: r.momentumGained,
+    o: original,
+    rr: [...(Array.isArray(entry.rr) ? entry.rr : []), ...records],
+  };
+}
+
+// The reroll lines for an entry, grouped by press: one line per reroll event, in order.
+export function rerollLines(entry) {
+  const groups = [];
+  for (const r of Array.isArray(entry && entry.rr) ? entry.rr : []) {
+    const last = groups[groups.length - 1];
+    if (last && last.g === r.g) last.dice.push(r);
+    else groups.push({ g: r.g, how: r.how, dice: [r] });
+  }
+  return groups.map((grp) => ({
+    how: grp.how,
+    text: `Reroll ${grp.dice.map((d) => `${d.from} → ${d.to}`).join(", ")} (${REROLL_LABELS[grp.how] || grp.how}${REROLL_FREE.includes(grp.how) ? ", free" : ""})`,
+  }));
+}
+
+// What a reroll of `entry` could be paid with, for the person who made it. `who` says
+// what they can pay from:
+//
+//   { kind: "pc", spirit, sources, inspireAt, firstAfterInspire }   a character
+//   { kind: "gm", threat, personalThreat }                          the GM's own roll
+//   { kind: "none" }                                                nothing to pay with
+//
+// `sources` is the list the creator writes into the character's snapshot (`rerolls`):
+// the free rerolls and modifiers that character actually has. Conditions the sheet
+// cannot see — "when aiming", "a trading test" — come back as `when`, and the person
+// confirms them; the free reroll is theirs to claim honestly.
+export function rerollOptions(entry, who = {}) {
+  if (!entry || entry.kind === "action" || entry.claimed) return [];
+  const out = [];
+  const attr = String(entry.an || "").toLowerCase();
+  const skill = String(entry.sn || "").toLowerCase();
+  const fits = (src) => (!src.attrs || !src.attrs.length || src.attrs.includes(attr))
+    && (!src.skills || !src.skills.length || src.skills.includes(skill));
+  const offer = (how, extra) => {
+    if (!rerollProblem(entry, { how, dice: [{ i: 0, to: 1 }], mobile: extra.max === 2 })) out.push({ how, label: REROLL_LABELS[how], ...extra });
+  };
+  if (who.kind === "pc") {
+    const sources = Array.isArray(who.sources) ? who.sources : [];
+    const mobile = sources.find((x) => x && x.id === "mobile" && fits(x));
+    if ((who.spirit ?? 0) >= 1) {
+      offer("spirit", { max: mobile ? 2 : 1, cost: "1 Spirit", note: mobile ? "Mobile: this Spirit rerolls two dice" : "" });
+    }
+    for (const src of sources) {
+      if (!src || !REROLL_FREE.includes(src.id) || src.id === "inspire") continue;
+      if (!fits(src)) continue;
+      offer(src.id, { max: 1, cost: "free", when: src.when || "", text: src.text || "" });
+    }
+    if (who.inspireAt && who.firstAfterInspire === entry.id) {
+      offer("inspire", { max: 1, cost: "free", when: "", text: "An ally with Inspire restored your Spirit: re-roll 1d20 on your next Skill Test for free." });
+    }
+  } else if (who.kind === "gm") {
+    if ((who.personalThreat ?? 0) >= 1) offer("personalThreat", { max: 1, cost: "1 Personal Threat" });
+    offer("threat", { max: 1, cost: "1 Threat" });
+  }
+  return out;
+}
+
+// -------------------------------------------------------------
 // Which events require the GM (0.9.2)
 // -------------------------------------------------------------
 // Enforced in background.js, which is the only writer of room metadata and therefore
@@ -1094,7 +1279,11 @@ export function isGmOnlyEvent(ev) {
 // Roll events carry an id and are deduplicated, so applying one twice is safe.
 // Pool events are deltas and cannot be, which is why clients do not apply them
 // optimistically and instead wait for the GM's metadata update.
-export function applyEvent(state, ev) {
+// `ctx` is passed only by background.js, the one writer: `ctx.sender` is the player id
+// behind the connection that sent the event, which is what lets a reroll be refused when
+// it is not the roller's own. Other callers (the clients' own preview, the tests that
+// exercise the shapes) pass nothing.
+export function applyEvent(state, ev, ctx) {
   const next = { ...EMPTY_STATE, ...state };
   next.log = Array.isArray(next.log) ? next.log.slice() : [];
 
@@ -1175,6 +1364,16 @@ export function applyEvent(state, ev) {
     next.initiative = applyInitiativeAction(readInitiative(next), ev);
   } else if (ev?.type === "partyShared") {
     next.partyShared = !!ev.value;
+  } else if (ev?.type === "reroll" && ev.id) {
+    // 1.5. Your own rolls only. The sender is checked HERE, against the stored roll,
+    // because only the background page knows who really sent the event — a check in the
+    // sender's tab is a courtesy. A roll with no `by` (made before 0.9.4) belongs to
+    // nobody and cannot be rerolled.
+    next.log = next.log.map((e) => {
+      if (e.id !== ev.id) return e;
+      if (ctx && "sender" in ctx && (!e.by || e.by !== ctx.sender)) return e;
+      return applyReroll(e, ev) || e;
+    });
   } else if (ev?.type === "rush") {
     // 1.5. Stamped with the scene the room is in NOW, which is why the GM panel sends
     // this after its End Scene rather than before: the rush covers the scene that
