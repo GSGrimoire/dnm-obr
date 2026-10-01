@@ -95,12 +95,12 @@ function setupContextMenu() {
 // back to back.
 let writeChain = Promise.resolve();
 
-function persist(ev) {
+function persist(ev, ctx) {
   writeChain = writeChain
     .then(async () => {
       const meta = await OBR.room.getMetadata();
       const current = meta[ROOM_KEY] || EMPTY_STATE;
-      const next = trimState(applyEvent(current, ev));
+      const next = trimState(applyEvent(current, ev, ctx));
       await OBR.room.setMetadata({ [ROOM_KEY]: next });
     })
     .catch((err) => console.error("[dnm] persist failed", err));
@@ -133,16 +133,23 @@ function persist(ev) {
 
 // Connection ids, not player ids: a broadcast identifies its sender by connection.
 let gmConnections = new Set();
+// 1.5. Who is behind each connection, so a reroll can be checked against the roll's
+// `by` (a player id). Rebuilt with the GM set, from the same party read.
+let playerByConnection = new Map();
 
 async function refreshGmConnections() {
   try {
-    const [players, self] = await Promise.all([
+    const [players, self, selfId] = await Promise.all([
       OBR.party.getPlayers(),
       OBR.player.getConnectionId(),
+      OBR.player.getId(),
     ]);
     const next = new Set(
       players.filter((p) => p.role === "GM").map((p) => p.connectionId),
     );
+    const owners = new Map(players.map((p) => [p.connectionId, p.id]));
+    if (self && selfId) owners.set(self, selfId);
+    playerByConnection = owners;
     // getPlayers() lists everyone else in the room, never this client. This page only
     // relays while this client is the GM, so its own connection belongs in the set —
     // without it the GM's own presses would be the first thing refused.
@@ -168,7 +175,11 @@ function relay(event) {
     );
     return;
   }
-  persist(event.data);
+  // 1.5. Every event carries who sent it into the reducer. Only a reroll reads it: a
+  // player may reroll their own roll and nobody else's, and this page is the only place
+  // that knows who really sent an event. An unknown connection reads as nobody, which
+  // refuses the reroll rather than waving it through.
+  persist(event.data, { sender: playerByConnection.get(event.connectionId) || null });
 }
 
 async function setRelay(role) {

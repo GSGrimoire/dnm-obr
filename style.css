@@ -884,3 +884,26 @@ body.obr-resizing .obr-resize { background: var(--teal-dim); }
    as a bare teal bar above the roller whenever nothing was selected — since the banner
    was introduced. Found while screenshotting the GM tools. */
 .char-banner[hidden] { display: none; }
+
+/* -------------------------------------------------------------
+   Rerolls (1.5)
+   -------------------------------------------------------------
+   Your own roll's dice are buttons. A picked die is ringed; a die a reroll replaced is
+   struck through in the original row, which stays as it was written. The reroll line
+   and the new result sit beneath it. */
+button.die { cursor: pointer; padding: 0; font-weight: inherit; }
+button.die:hover { border-color: var(--border-bright); }
+.die.is-picked { outline: 2px solid var(--warning); outline-offset: 1px; }
+.die.is-replaced { opacity: .45; text-decoration: line-through; }
+.entry-reroll { font-family: var(--font-mono); font-size: 10px; color: var(--warning); margin-top: 3px; }
+.entry-reroll-label { font-family: var(--font-mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); margin-top: 4px; }
+.reroll-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 5px 0 2px; padding: 5px 6px; border: 1px dashed var(--warning); border-radius: 3px; }
+.reroll-head { font-family: var(--font-mono); font-size: 10px; color: var(--warning); flex: 1 0 100%; }
+.reroll-opt.is-free { color: var(--teal); border-color: var(--teal-dim); }
+/* The free-reroll reminder: the same --warning yellow the sheet uses for a note that
+   wants your attention before you move on. */
+.reroll-hint {
+  font-size: 10px; line-height: 1.4; color: var(--warning); margin-top: 4px;
+  padding: 3px 6px; border-left: 2px solid var(--warning); background: rgba(255, 209, 102, 0.08);
+  cursor: help;
+}
