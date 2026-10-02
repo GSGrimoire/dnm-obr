@@ -798,7 +798,9 @@ function renderRollEntry(e) {
 // people forget they have. Only for the person who made the roll, because nobody else
 // can use it, and gone once it is used or the Momentum is claimed.
 function freeRerollHint(e) {
-  const free = rerollOptions(e, payerFor(e)).filter((o) => o.cost === "free");
+  // Only the ones LIKELY to apply: see rerollHintLikely() in dnm.js. The rest are still
+  // offered when a die is picked; they just do not nag.
+  const free = rerollOptions(e, payerFor(e)).filter((o) => o.cost === "free" && o.likely);
   if (!free.length) return null;
   const hint = document.createElement("div");
   hint.className = "reroll-hint";
