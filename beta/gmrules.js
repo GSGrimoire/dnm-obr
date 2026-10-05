@@ -384,6 +384,255 @@ export function tickLines(list, round) {
 }
 
 // -------------------------------------------------------------
+// Chapter 5: Non-Player Characters (1.6)
+// -------------------------------------------------------------
+// Quoted from the printed pages 126-131, as the Chapter 4 quotes are. Two printed slips
+// are corrected and say so: "akill" (p.127) is shown as "skill". Chapter 4 sends the
+// reader to a "Menacing" ability in this chapter; there is none. The ability the
+// chapter prints is THREATENING, and the table treats them as one (decided 1.6). The
+// old "Threat when it turns up" reading survives only as a house rule the GM switches on.
+export const NPC_SPEND_RULE = {
+  page: 126,
+  quote: "NPCs do not have Spirit. Rather, they can spend Threat from the GM’s pool in all the ways that the PCs can spend Spirit, including to avoid attacks. An NPC cannot spend Threat to avoid an attack if they have less than the amount needed. Some NPCs — including all Major NPCs — have a personal Threat pool that they alone can spend.",
+};
+
+export const SIDES = [
+  { id: "adversary", label: "Adversary", page: 126,
+    quote: "Adversaries are NPCs who oppose the player characters, often because they are affiliated with opposing factions." },
+  { id: "ally", label: "Ally", page: 126,
+    quote: "Allies are NPCs who work with or for the player characters. Players can often take direct control of NPCs in situations where their normal player character is absent or busy elsewhere." },
+  { id: "bystander", label: "Bystander", page: 126,
+    quote: "Bystanders are NPCs who are neither opposed to or aligned with the player characters, and who are just trying to get on with their lives." },
+];
+
+export const ALLY_RULE = {
+  page: 127,
+  quote: "With an allied NPC — one currently helping the player characters — any situation where they would spend Threat, they add an equivalent amount to Threat instead. Allied NPCs with a personal Threat pool spend points from that as normal, but must otherwise add to Threat to use special abilities, buy extra dice, or avoid injuries, etc.",
+};
+
+export const NORMAL_NPC_RULE = {
+  page: 127,
+  quote: "Normal NPCs have two attributes: a main attribute named for the NPC’s Truth, and a second, lower attribute simply called “Default”. Each of these attributes has an associated skill rating; this is normally 1 for the Default skill, and it is always lower than the main skill.",
+};
+
+export const NORMAL_DEFEAT_RULE = {
+  page: 127,
+  quote: "Normal NPCs are defeated after suffering a single Injury, of any kind.",
+};
+
+export const MAJOR_DEFEAT_RULE = {
+  page: 129,
+  quote: "Defeat: A Major NPC must suffer several Injuries before they are defeated. This is normally equal to the number of Truths it has plus +1.",
+};
+
+export const MAJOR_PT_RULE = {
+  page: 129,
+  quote: "Personal Threat: All Major NPCs have a pool of Personal Threat, typically containing 3-6 points. The GM may spend this Threat on any actions or abilities the NPC has, including avoiding Injury.",
+};
+
+export const MAJOR_ACTIONS_RULE = {
+  page: 129,
+  quote: "Special Actions: Major NPCs have a specific list of special actions they can perform. These include the NPC’s attacks and weapons, and they will often be presented in a table allowing the actions the NPC takes to be determined randomly on a given turn. Each Major NPC has 4-6 actions.",
+};
+
+export const COMPETENCE_RULE = {
+  page: 128,
+  quote: "Select a Competence level for the NPC at their main area of expertise — this determines their ratings for their main attribute and skill. Then, select a lower level of Competence, and use that to determine the ratings for the NPC’s default attribute and skill.",
+};
+
+// p.128. `attr` is the top of the printed range: the picker fills it and the GM can take
+// one off.
+export const COMPETENCE = [
+  { id: "basic", label: "Basic", range: "7-8", attr: 8, skill: 1 },
+  { id: "proficient", label: "Proficient", range: "9-10", attr: 10, skill: 2 },
+  { id: "talented", label: "Talented", range: "11-12", attr: 12, skill: 3 },
+  { id: "exceptional", label: "Exceptional", range: "13-14", attr: 14, skill: 4 },
+  { id: "master", label: "Master", range: "15-16", attr: 16, skill: 5 },
+];
+
+export function competenceOf(attr, skill) {
+  const a = clampInt(attr, 0, 20);
+  return COMPETENCE.find((c) => c.skill === clampInt(skill, 0, 6) && a >= c.attr - 1 && a <= c.attr) || null;
+}
+
+export const NATURAL_WEAPON_RULE = {
+  page: 128,
+  quote: "For NPCs with a “natural” form of attack (i.e., one from their own body, not from a weapon they carry), a rating equal to 1 lower than their main Skill, or equal to their main Skill if they’re meant to be particularly deadly.",
+};
+
+export const GROUP_RULES = {
+  action: { page: 128, label: "Group Action",
+    quote: "Group Action: when a group of NPCs attempts a Test, one of the NPCs in the group leads the action, and the rest assist that leader." },
+  attack: { page: 128, label: "Attacking a Group",
+    quote: "Attacking a Group: Attacks against groups are always normal Skill Tests, rather than contests. If a group is able to defend itself (such as from a melee attack that they are aware of, or from a ranged attack while in cover), the difficulty of the attack increases by +1 for every 2 NPCs in the group (i.e., attacking a group of 4 Thralls in melee would have a difficulty of 3). NPCs who receive this bonus may spend 2 points of Threat to counter-attack if an attack against them misses." },
+  defeat: { page: 128, label: "Defeating Groups",
+    quote: "Defeating Groups: when a group of NPCs is attacked, a single NPC in the group is hit by the attack, suffers an Injury and is thus defeated unless they spend Threat to avoid the Injury. The attacker may spend Momentum to hit additional NPCs in that group; every 2 Momentum spent hits one extra NPC. If the weapon has the Burst quality, it hits one extra NPC for every 1 Momentum spent instead." },
+};
+export const COUNTER_ATTACK_COST = 2;
+
+// The difficulty ADDED to an attack on a group that can defend itself. The book's own
+// example is the check: four Thralls take a Difficulty 1 attack to 3.
+export function groupDefenceBonus(count) {
+  return Math.floor(clampInt(count, 0, 24) / 2);
+}
+
+// Momentum for `extra` more NPCs hit in a group (p.128).
+export function extraHitsMomentum(extra, burst = false) {
+  return clampInt(extra, 0, 24) * (burst ? 1 : 2);
+}
+
+// The common abilities and actions (pp.130-131). `aliases` are the names the book's
+// own stat blocks use for the same thing — the Waker's "Armor Plating", the Prowlcat's
+// "Armored Hide" — so a stat block typed or imported with those names is recognised.
+// `cost` is what a press spends; `gain` is what it adds. `kind` decides the button.
+export const NPC_ABILITIES = [
+  { key: "armored", label: "Armored", page: 130, type: "ability", aliases: ["armor plating", "armour plating", "armored hide", "armoured"],
+    quote: "The NPC has a Protection rating, reducing the amount of Threat it must spend to avoid Injury. This Protection rating is halved by attacks with the Breaker quality." },
+  { key: "threatening", label: "Threatening", page: 130, type: "ability", aliases: ["menacing"], gain: 1,
+    quote: "The NPC is especially dangerous, and the situation will only get worse while they are present. The NPC adds +1 to Threat at the start of each of its actions." },
+  { key: "incorporeal", label: "Incorporeal", page: 131, type: "ability",
+    quote: "The NPC’s form is not solid, but a collection of nanites and projected kinetic fields. Any attack which does not inflict a Shocked Injury counts as inflicting an Injury of Disrupted 1." },
+  { key: "swift", label: "Swift", page: 131, type: "ability", cost: 1,
+    quote: "The NPC is quick and maneuverable. When this NPC takes an action, it may spend 1 Threat to move one extra zone before or after its action." },
+  { key: "decrepit", label: "Decrepit", page: 131, type: "ability", compAt: 19,
+    quote: "The NPC is damaged or malfunctioning, and suffers complications on a 19 or 20, gaining a malfunction Truth on its next turn if a complication is rolled." },
+  { key: "bigAndSlow", label: "Big and Slow", page: 131, type: "ability",
+    quote: "The NPC is especially large and slow-moving. Reduce the difficulty of ranged attacks against this NPC by 1." },
+  { key: "solitary", label: "Solitary", page: 131, type: "ability",
+    quote: "The NPC typically operates alone, often against numerous foes. It may take more than one turn each round, but each turn after the first costs Threat: the first extra turn costs 1 Threat, the second costs 2, and so forth." },
+  { key: "ambush", label: "Ambush", page: 131, type: "action",
+    quote: "May only attempt while hidden. The NPC emerges from the shadows in a zone of its choosing and makes a melee attack. The target cannot defend against this attack. The melee attack is made with a weapon chosen when this action is added to an NPC." },
+  { key: "defend", label: "Defend", page: 131, type: "action",
+    quote: "The NPC adopts a defensive stance. Until the start of its next turn, the NPC either gains +2 Protection or increases the difficulty of attacks against it by +1 (choose when adding this action to an NPC). In addition, it may counter-attack against failed melee attacks for free using a melee weapon chosen when this action is added to an NPC." },
+  { key: "hunt", label: "Hunt", page: 131, type: "action",
+    quote: "The NPC carefully observes its surroundings and watches its enemies. Make a difficulty 0 Insight (Study) Test. Any successes are immediately converted to Threat." },
+  { key: "lurk", label: "Lurk", page: 131, type: "action", cost: 1,
+    quote: "The NPC moves slowly and cautiously, preparing to strike. Spend 1 Threat while the NPC is in darkness or otherwise has cover or concealment. The NPC is hidden: remove their token from its current zone. PCs must succeed at an Insight (Sneak) Test contested by the NPC’s Quickness (Sneak) Test to locate it. When located, place the NPC in any zone." },
+  { key: "meleeAttack", label: "Melee Attack", page: 131, type: "action",
+    quote: "The NPC makes a melee attack with the chosen melee weapon." },
+  { key: "pounce", label: "Pounce", page: 131, type: "action", cost: 1,
+    quote: "When the NPC moves to an enemy and makes a melee attack, spend 1 Threat to Pounce. If the attack is successful, the target gains a knocked prone Truth." },
+  { key: "rangedAttack", label: "Ranged Attack", page: 131, type: "action",
+    quote: "The NPC makes a ranged attack with the chosen ranged weapon." },
+  { key: "recharge", label: "Recharge", page: 131, type: "action",
+    quote: "The NPC draws power from an internal source. If the NPC’s Powered weapon has discharged, it is now recharged." },
+  { key: "retreat", label: "Retreat", page: 131, type: "action",
+    quote: "The NPC retreats from battle. The NPC takes no further part in this scene. Add X to Threat where X is the number of Injuries the NPC can withstand before being defeated." },
+  { key: "selfRepair", label: "Self-Repair", page: 131, type: "action", aliases: ["selfrepair", "self repair"],
+    quote: "The machine pauses, activating diagnostics and self-repair protocols. It makes a Resolve (Operate) Test with a Difficulty of 2 to remove any one hindering Truth affecting it." },
+];
+
+const ABILITY_NAMES = NPC_ABILITIES.flatMap((a) => [a, ...(a.aliases || []).map((n) => ({ ...a, alias: n }))]
+  .map((x) => ({ key: x.key, name: (x.alias || x.label).toLowerCase() })))
+  .sort((a, b) => b.name.length - a.name.length);
+
+const squash = (s) => String(s || "").toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+
+// Which library entry a stat block line is, from its NAME. Starts-with, longest name
+// first, so "Armored Hide" is Armored and "Self-Repair" is not read as anything shorter.
+export function abilityKey(name) {
+  const n = squash(name);
+  if (!n) return null;
+  const hit = ABILITY_NAMES.find((a) => n === squash(a.name) || n.startsWith(squash(a.name) + " "));
+  return hit ? hit.key : null;
+}
+
+export function abilityByKey(key) {
+  return NPC_ABILITIES.find((a) => a.key === key) || null;
+}
+
+// Every library key a stat block carries, abilities and actions alike.
+export function npcKeys(npc) {
+  const keys = new Set();
+  for (const x of [...(npc?.abilities || []), ...(npc?.actions || [])]) {
+    const k = abilityKey(x.name);
+    if (k) keys.add(k);
+  }
+  return keys;
+}
+
+// The Threat a creature-specific action asks for, read off its own text: "Spend 2
+// Threat", "spend 1 Threat to Pounce", "Spend 1, 2, or 3 Threat". This is how the
+// Barg's Trample and the Cryptid's Stun-flash get a button without the library knowing
+// them. Null when the text names no spend.
+export function threatCostIn(text) {
+  const m = /spend\s+(\d+(?:\s*,\s*\d+)*(?:\s*,?\s*or\s+\d+)?)\s+threat/i.exec(String(text || ""));
+  if (!m) return null;
+  const nums = m[1].match(/\d+/g).map(Number).filter((n) => n > 0 && n <= 20);
+  if (!nums.length) return null;
+  return { min: Math.min(...nums), max: Math.max(...nums) };
+}
+
+// How many Injuries take it down (pp.127, 129). A Major NPC with no number set uses the
+// book's "Truths plus 1".
+export function defeatLimit(npc) {
+  if (!npc || npc.kind !== "major") return 1;
+  if (npc.defeat > 0) return npc.defeat;
+  return Math.max(1, (npc.truths || []).length) + 1;
+}
+
+// The Threat to avoid an Injury (pp.126, 130): the damage rating less Protection.
+// Breaker halves Protection, rounded down — the book's own blocks agree (2 → 1, 4 → 2).
+// `ranged` adds a block's extra Protection against ranged attacks (the Prowlcat's), and
+// `defending` the Defend action's +2.
+export function avoidInjuryCost({ damage, protection = 0, rangedProtection = 0, ranged = false, defending = false, breaker = false } = {}) {
+  let p = clampInt(protection, 0, 20) + (ranged ? clampInt(rangedProtection, 0, 20) : 0) + (defending ? 2 : 0);
+  if (breaker) p = Math.floor(p / 2);
+  return Math.max(0, clampInt(damage, 0, 20) - p);
+}
+
+// The Injuries it could still take: what Retreat adds to Threat (p.131). A group counts
+// each of its NPCs, since each is defeated by one.
+export function injuriesLeft(npc, row) {
+  const count = clampInt(row?.count ?? 1, 0, 24);
+  if (!npc || npc.kind !== "major") return count;
+  return Math.max(0, defeatLimit(npc) - clampInt(row?.injuries, 0, 20));
+}
+
+// A weapon's damage rating: the first number in "Impaled 3" or "Plasma Burn 3, Breaker".
+export function damageRating(text) {
+  const m = /(\d{1,2})/.exec(String(text || ""));
+  return m ? clampInt(m[1], 0, 20) : 0;
+}
+
+export function hasQuality(weapon, quality) {
+  return new RegExp(`\\b${quality}\\b`, "i").test(`${weapon?.qualities || ""} ${weapon?.damage || ""}`);
+}
+
+// Solitary: the n-th extra turn this round costs n (p.131).
+export function solitaryCost(extraTurnsTaken) {
+  return clampInt(extraTurnsTaken, 0, 20) + 1;
+}
+
+// A d20 range off an action ("1-4", "17–20", "9") and the action a roll lands on.
+export function parseRollRange(text) {
+  const m = /^\s*(\d{1,2})\s*(?:[-–—]|to)?\s*(\d{1,2})?\s*$/.exec(String(text || ""));
+  if (!m) return null;
+  const lo = Number(m[1]);
+  const hi = m[2] ? Number(m[2]) : lo;
+  if (lo < 1 || hi > 20 || hi < lo) return null;
+  return { lo, hi };
+}
+
+export function hasActionTable(npc) {
+  return (npc?.actions || []).some((a) => parseRollRange(a.roll));
+}
+
+export function actionForRoll(npc, d20) {
+  return (npc?.actions || []).find((a) => {
+    const r = parseRollRange(a.roll);
+    return r && d20 >= r.lo && d20 <= r.hi;
+  }) || null;
+}
+
+// The house rule the table may switch on: the 1.5 reading of Chapter 4's "Menacing", Threat
+// added when the NPC enters the scene, on top of the printed Threatening.
+export const ARRIVAL_HOUSE_RULE = {
+  label: "House rule: Threat on arrival",
+  note: "Not in the book. Chapter 4 says Menacing NPCs \"generate Threat simply by turning up\" and points to Chapter 5, which prints Threatening (+1 Threat at each of its actions) instead. Switched on, a stat block's Arrival Threat is added when it is revealed, as 1.5 did.",
+};
+
+// -------------------------------------------------------------
 // NPC stat blocks
 // -------------------------------------------------------------
 // The SHAPE follows the community Foundry VTT system for Dreams and Machines (built with
@@ -395,9 +644,9 @@ export function tickLines(list, round) {
 //   MAJOR   the four attributes and seven skills a character has, Truths, how many
 //           Injuries defeat it, a Personal Threat pool, and actions with a roll range.
 //
-// Menacing is stored as a number because Chapter 4 describes it as Threat generated "by
-// turning up". What else Chapter 5 says about it is not known here, so it is only ever
-// used for that: the Threat added when the NPC enters the scene.
+// `menacing` (1.5) is now ARRIVAL Threat, used only under the house rule above. Chapter 5
+// has no Menacing; it has Threatening, and a 1.5 stat block with Menacing set is given
+// the Threatening ability on the way out of storage so it behaves as printed.
 export const NPC_KINDS = ["normal", "major"];
 export const NPC_ATTRS = ["might", "quickness", "insight", "resolve"];
 export const NPC_SKILLS = ["fight", "move", "operate", "sneak", "study", "survive", "talk"];
@@ -431,7 +680,7 @@ export function normalizeNpc(raw) {
   const skills = {};
   for (const a of NPC_ATTRS) attrs[a] = clampInt(n.attrs && n.attrs[a], 0, 20) || 8;
   for (const s of NPC_SKILLS) skills[s] = clampInt(n.skills && n.skills[s], 0, 6);
-  return {
+  const out = {
     id: cleanName(n.id, 40) || newNpcId(),
     kind,
     name: cleanName(n.name, 32) || "Unnamed adversary",
@@ -447,11 +696,20 @@ export function normalizeNpc(raw) {
     personalThreat: clampInt(n.personalThreat, 0, 20),
     menacing: clampInt(n.menacing, 0, 6),
     protection: clampInt(n.protection, 0, 10),
-    weapons: cleanPairs(n.weapons, [["name", 40], ["range", 10], ["damage", 10], ["qualities", 80]]),
+    rangedProtection: clampInt(n.rangedProtection, 0, 10),
+    // Damage holds the Injury and its rating: "Plasma Burn 3" is 13 characters, and a cap of
+    // 10 (1.5) cut it to "Plasma Bur" and lost the number Avoid the Injury reads.
+    weapons: cleanPairs(n.weapons, [["name", 40], ["range", 12], ["damage", 24], ["qualities", 80]]),
     actions: cleanPairs(n.actions, [["name", 40], ["roll", 10], ["text", TEXT_MAX]]),
     abilities: cleanPairs(n.abilities, [["name", 40], ["text", TEXT_MAX]]),
     notes: String(n.notes == null ? "" : n.notes).slice(0, TEXT_MAX * 2),
   };
+  // Menacing is Threatening (decided 1.6). Added once, never twice, and only while the
+  // list has room.
+  if (out.menacing > 0 && !out.abilities.some((a) => abilityKey(a.name) === "threatening") && out.abilities.length < MAX_LIST) {
+    out.abilities.push({ name: "Threatening", text: abilityByKey("threatening").quote });
+  }
+  return out;
 }
 
 export function normalizeRoster(list) {
@@ -499,6 +757,47 @@ export function readNpcTokenRef(meta) {
   return id ? { id } : null;
 }
 
+// A token to put on the map for an NPC (1.6). The vendored SDK carries no item builders,
+// so this is the object `buildImage(...).build()` makes in @owlbear-rodeo/sdk 3.1.0
+// (ImageBuilder over GenericItemBuilder), field for field, with our choices on top:
+//   - the CHARACTER layer, one grid square (a 300px image at 300 dpi)
+//   - HIDDEN: it lands where only the GM sees it, the same rule as a hidden initiative
+//     row, and the GM shows it when the table should
+//   - named "NPC", never the adversary's name, and the metadata is the opaque id only
+//     (npcTokenRef). Everything on an item is readable by every client in the room.
+export const NPC_TOKEN_SIZE = 300;
+export function buildNpcTokenItem({ url, playerId, position, id, now = Date.now() }) {
+  const pid = String(playerId || "");
+  return {
+    createdUserId: pid,
+    id: String(id),
+    name: "NPC",
+    zIndex: now,
+    lastModified: new Date(now).toISOString(),
+    lastModifiedUserId: pid,
+    locked: false,
+    metadata: {},
+    position: { x: Number(position?.x) || 0, y: Number(position?.y) || 0 },
+    rotation: 0,
+    scale: { x: 1, y: 1 },
+    type: "IMAGE",
+    visible: false,
+    layer: "CHARACTER",
+    image: { width: NPC_TOKEN_SIZE, height: NPC_TOKEN_SIZE, url: String(url), mime: "image/svg+xml" },
+    // An image's own dpi is its pixels per grid square, whatever the scene's grid is.
+    grid: { dpi: NPC_TOKEN_SIZE, offset: { x: NPC_TOKEN_SIZE / 2, y: NPC_TOKEN_SIZE / 2 } },
+    text: {
+      richText: [{ type: "paragraph", children: [{ text: "" }] }],
+      plainText: "",
+      style: { padding: 8, fontFamily: "Roboto", fontSize: 24, fontWeight: 400, textAlign: "CENTER", textAlignVertical: "BOTTOM", fillColor: "white", fillOpacity: 1, strokeColor: "white", strokeOpacity: 1, strokeWidth: 0, lineHeight: 1.5 },
+      type: "PLAIN",
+      width: "AUTO",
+      height: "AUTO",
+    },
+    textItemType: "LABEL",
+  };
+}
+
 // The export file. Plain JSON under a header line, so it reads in a text editor and
 // pastes back through Import.
 export const ROSTER_FILE_HEADER = "Dreams & Machines — NPC roster";
@@ -537,39 +836,48 @@ export const SAMPLE_NPCS = normalizeRoster([
     id: "sample-raider", kind: "normal", sample: true, name: "Raider",
     source: "Sample — not from the book",
     truth: "Desperate scavenger with a blade",
-    main: { attr: 10, skill: 2 }, fallback: { attr: 8, skill: 1 },
-    menacing: 0,
-    weapons: [{ name: "Scrap blade", range: "Melee", damage: "3", qualities: "" }],
-    actions: [{ name: "Gang up", roll: "", text: "Another Raider within reach may assist this Raider's attack." }],
+    main: { attr: 10, skill: 2 }, fallback: { attr: 7, skill: 1 },
+    weapons: [{ name: "Scrap blade", range: "Melee", damage: "Bleeding 2", qualities: "" }],
+    actions: [{ name: "Retreat", roll: "", text: "Breaks and runs when the fight turns. Takes no further part in the scene; add 1 to Threat." }],
   },
   {
     id: "sample-drone", kind: "normal", sample: true, name: "Sentry drone",
     source: "Sample — not from the book",
     truth: "Hovering pre-War security machine",
-    main: { attr: 11, skill: 2 }, fallback: { attr: 7, skill: 0 },
-    menacing: 1, protection: 2,
-    weapons: [{ name: "Stun emitter", range: "Ranged", damage: "2", qualities: "Non-Lethal" }],
-    abilities: [{ name: "Alarm", text: "When it first spots an intruder, the GM may add 1 to Threat." }],
+    main: { attr: 11, skill: 3 }, fallback: { attr: 7, skill: 1 },
+    protection: 1,
+    weapons: [{ name: "Stun emitter", range: "Ranged", damage: "Shocked 2", qualities: "" }],
+    actions: [{ name: "Hunt", roll: "", text: "Sweeps the area. Difficulty 0 Insight (Study) Test; every success becomes Threat." }],
+    abilities: [{ name: "Armored", text: "Protection 1 (reduced to 0 vs Breaker attacks)." }],
   },
   {
     id: "sample-beast", kind: "normal", sample: true, name: "Feral hound",
     source: "Sample — not from the book",
     truth: "Pack hunter of the ruins",
     main: { attr: 10, skill: 2 }, fallback: { attr: 7, skill: 1 },
-    weapons: [{ name: "Bite", range: "Melee", damage: "2", qualities: "" }],
+    weapons: [{ name: "Bite", range: "Melee", damage: "Ripped 2", qualities: "" }],
+    actions: [{ name: "Pounce", roll: "", text: "When it moves to an enemy and makes a melee attack, spend 1 Threat: on a hit the target gains a knocked prone Truth." }],
   },
   {
     id: "sample-captain", kind: "major", sample: true, name: "Raider captain",
     source: "Sample — not from the book",
     truths: ["Scarred veteran of a dozen raids", "Commands by fear"],
     attrs: { might: 11, quickness: 9, insight: 9, resolve: 10 },
-    skills: { fight: 3, move: 1, operate: 1, sneak: 1, study: 0, survive: 2, talk: 2 },
-    defeat: 3, personalThreat: 3, menacing: 2, protection: 1,
-    weapons: [{ name: "Heavy cleaver", range: "Melee", damage: "4", qualities: "Breaker" }],
+    skills: { fight: 3, move: 2, operate: 1, sneak: 1, study: 1, survive: 2, talk: 2 },
+    defeat: 3, personalThreat: 4, protection: 1,
+    weapons: [
+      { name: "Heavy cleaver", range: "Melee", damage: "Impaled 3", qualities: "Breaker" },
+      { name: "Salvaged rifle", range: "Ranged", damage: "Bleeding 2", qualities: "" },
+    ],
     actions: [
-      { name: "Cleave", roll: "1-3", text: "Attacks the nearest character with the heavy cleaver." },
-      { name: "Rally", roll: "4-5", text: "Spends 1 Personal Threat; every Raider in the scene may act again this round." },
-      { name: "Threaten", roll: "6", text: "Might + Talk against a character's Resolve + Talk; on success that character's next Test is +1 Difficulty." },
+      { name: "Cleave", roll: "1-6", text: "Wades in and attacks the nearest character with the heavy cleaver. Might (Fight): 11 (3)." },
+      { name: "Bark orders", roll: "7-12", text: "One Raider in the scene may take an extra action straight away." },
+      { name: "Covering fire", roll: "13-16", text: "Fires the rifle at an enemy it can see. Quickness (Fight): 9 (3)." },
+      { name: "Rally", roll: "17-20", text: "Spend 2 Threat: every Raider defeated this round gets back up with one Injury fewer." },
+    ],
+    abilities: [
+      { name: "Armored", text: "Protection 1 (reduced to 0 vs Breaker attacks)." },
+      { name: "Threatening", text: "Adds +1 to Threat each time it takes an action." },
     ],
   },
 ]);
