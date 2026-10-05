@@ -25,7 +25,10 @@ index.html         background.js      icon-attach.svg
 roller.js          dnm.js             icon-sheet.svg
 style.css          sdk.js             gm.html
 gmpanel.js         gmrules.js         gm.js
+npc-token.svg
 ```
+
+`npc-token.svg` (1.6) is the image a token gets from the Bestiary's *Place on map*.
 
 `sdk.js` is the vendored Owlbear SDK, added in 0.9.1. It is committed rather than
 built — see **Third-party code** below for why it is not fetched at runtime.

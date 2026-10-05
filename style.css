@@ -817,6 +817,51 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
 
 /* The one floating tooltip. Fixed, so it can leave the section it belongs to, and
    clamped to the viewport in showTip(). */
+/* 1.6: Chapter 5 — fighter tools, stat block cards, the Bestiary ---------------- */
+.gmt-fighter.is-down .gmt-fighter-name { text-decoration: line-through; opacity: .65; }
+.gmt-tools {
+  display: flex; flex-direction: column; gap: 5px;
+  margin: 2px 0 4px; padding: 6px 8px;
+  border-left: 2px solid var(--teal-dim); background: var(--teal-faint);
+}
+.gmt-tools .gmt-subhead { margin-top: 4px; }
+.gmt-side button { font-size: 11px; padding: 4px 0; }
+.gmt-fact {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text);
+  border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px;
+}
+.gmt-fact[tabindex] { cursor: help; }
+.gmt-fact.is-down, .gmt-tag.is-down { color: var(--accent); border-color: rgba(255, 107, 53, 0.45); }
+.gmt-sb-facts { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0; }
+.gmt-sb-truth { font-style: italic; color: var(--text-bright); font-size: 11px; }
+.gmt-sb-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin: 3px 0; }
+.gmt-sb-grid.is-skills { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.gmt-sb-grid.is-normal { grid-template-columns: repeat(2, minmax(0, 1fr)); cursor: help; }
+.gmt-sb-cell {
+  display: flex; flex-direction: column; align-items: center; min-width: 0;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; padding: 2px 1px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-bright);
+}
+.gmt-sb-cell small {
+  font-family: var(--font-display); font-size: 8px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--teal); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gmt-sb-cell em { font-style: normal; font-size: 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; }
+.gmt-sb-head {
+  font-family: var(--font-display); font-size: 10px; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--teal); margin-top: 4px;
+}
+.gmt-sb-head[tabindex] { cursor: help; }
+.gmt-sb-item b.gmt-has-tip { border-bottom: 1px dotted var(--teal); cursor: help; }
+.gmt-npc-line {
+  flex: 1 0 100%; min-width: 0; font-family: var(--font-mono); font-size: 9px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gmt-npc-wrap.is-open { background: var(--teal-faint); }
+.gmt-kind button { font-size: 10px; padding: 3px 6px; flex: 0 0 auto; }
+.gmt-file { font-size: 11px; width: 100%; }
+.gmt-editor select { max-width: 100%; }
+
 .gm-tip {
   position: fixed; z-index: 200; pointer-events: none;
   background: var(--bg4); border: 1px solid var(--border-bright); border-radius: 4px;

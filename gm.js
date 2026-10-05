@@ -42,6 +42,13 @@ const host = {
   itemsById: (ids) => OBR.scene.items.getItems(ids),
   selection: () => OBR.player.getSelection(),
   updateItems: (ids, fn) => OBR.scene.items.updateItems(ids, fn),
+  // 1.6: Place on map.
+  addItems: (items) => OBR.scene.items.addItems(items),
+  playerId: () => OBR.player.getId(),
+  viewCenter: async () => {
+    const [w, h] = await Promise.all([OBR.viewport.getWidth(), OBR.viewport.getHeight()]);
+    return OBR.viewport.inverseTransformPoint({ x: w / 2, y: h / 2 });
+  },
   status: setStatus,
   changed: () => { if (panel) panel.refresh(); },
 };

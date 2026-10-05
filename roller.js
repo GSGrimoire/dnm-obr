@@ -38,7 +38,7 @@ import {
   mountGmPanel, pushEpochVia, startInitiativeVia, tickRound, spendSideEffects, readFight, spendPersonalThreat,
   readGmLog, readTickers, isPoppedOut, markPopped, findNpc, GM_KEYS, endFight,
 } from "./gmpanel.js";
-import { tickerTotal, npcRollValues, readNpcTokenRef } from "./gmrules.js";
+import { tickerTotal, npcRollValues, readNpcTokenRef, npcKeys, abilityByKey } from "./gmrules.js";
 
 const MAX_LOG_ENTRIES = 40;
 
@@ -88,6 +88,13 @@ const gmHost = {
   itemsById: (ids) => OBR.scene.items.getItems(ids),
   selection: () => OBR.player.getSelection(),
   updateItems: (ids, fn) => OBR.scene.items.updateItems(ids, fn),
+  // 1.6: Place on map.
+  addItems: (items) => OBR.scene.items.addItems(items),
+  playerId: () => OBR.player.getId(),
+  viewCenter: async () => {
+    const [w, h] = await Promise.all([OBR.viewport.getWidth(), OBR.viewport.getHeight()]);
+    return OBR.viewport.inverseTransformPoint({ x: w / 2, y: h / 2 });
+  },
   status: (msg) => setStatus(msg),
   changed: () => { render(); if (gmTools) gmTools.refresh(); },
 };
@@ -186,7 +193,7 @@ async function doRoll() {
   const attrValue = clamp(+attrValEl.value, 0, 20);
   const skillValue = clamp(+skillValEl.value, 0, 20);
   const dice = rollDice(diceCount);
-  const compAt = readCompAt(state);
+  const compAt = rollCompAt();
   const result = resolveRoll(dice, attrValue, skillValue, difficulty, compAt);
 
   const entry = {
@@ -554,10 +561,21 @@ function applyNpc(banner, manual) {
 // -------------------------------------------------------------
 // Rendering
 // -------------------------------------------------------------
+// 1.6. Decrepit (GM Guide p.131): "suffers complications on a 19 or 20". Only for a roll
+// made AS that NPC — its token selected, no character on it — and never wider than the
+// room's own setting: the GM raising the danger to 17 still wins.
+function decrepitNpc() {
+  return !activeChar && activeNpc && npcKeys(activeNpc.npc).has("decrepit");
+}
+function rollCompAt() {
+  const room = readCompAt(state);
+  return decrepitNpc() ? Math.min(room, abilityByKey("decrepit").compAt) : room;
+}
+
 function updateHint() {
   const a = clamp(+attrValEl.value, 0, 20);
   const s = clamp(+skillValEl.value, 0, 20);
-  const compAt = readCompAt(state);
+  const compAt = rollCompAt();
   // Named explicitly rather than left at "20": once the GM lowers it, a player reading
   // the old line would be working from the wrong odds.
   // 0.9.10. Two lines, always broken in the same place. It wrapped to two lines anyway
@@ -573,6 +591,9 @@ function updateHint() {
   comp.className = "rule-hint-comp";
   if (compAt >= COMP_AT_MAX) {
     comp.textContent = "Complication on 20";
+  } else if (decrepitNpc() && compAt < readCompAt(state)) {
+    comp.classList.add("raised");
+    comp.textContent = `Complication on ${compAt}+ (Decrepit)`;
   } else {
     comp.classList.add("raised");
     comp.textContent = `Complication on ${compAt}+ (GM raised the danger)`;
