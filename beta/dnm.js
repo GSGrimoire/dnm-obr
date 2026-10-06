@@ -857,7 +857,10 @@ export const BOND_EFFECT_TTL_MS = 6 * 60 * 60 * 1000;
 // pressed. A character in another scene, or attached to nobody, is not facing this
 // adversity. An effect with no targets reaches every sheet, which is what the creator's
 // own sender does — it cannot read the scene.
-const BOND_KINDS = new Set(["rivalry", "grant", "drive", "adversity", "reversal"]);
+// 1.6. `revive` and `rouse` are one character helping another, so they are open like
+// `grant`, not GM-only. Revive clears the target's exhaustion and restores Spirit; rouse
+// ends the target's defeated state and restores nothing.
+const BOND_KINDS = new Set(["rivalry", "grant", "drive", "adversity", "reversal", "revive", "rouse"]);
 const GM_BOND_KINDS = new Set(["drive", "adversity", "reversal"]);
 export const MAX_EFFECT_TARGETS = 8;
 
@@ -919,6 +922,17 @@ export function sanitizeBondEffect(effect) {
     };
   }
 
+  if (effect.kind === "rouse") {
+    // No amount: being roused restores no Spirit and treats no Injury.
+    return {
+      ...base,
+      target: cleanText(effect.target, FIELD_LIMITS.who),
+      source: cleanText(effect.source, FIELD_LIMITS.label),
+    };
+  }
+
+  // `grant` and `revive` share a shape. Revive restores 1 Spirit, 2 with a supportive
+  // bond, and Reassure's half-Talk on the Test route reaches 3: inside the same 4.
   const amount = Math.round(Number(effect.amount) || 0);
   return {
     ...base,

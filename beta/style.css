@@ -330,6 +330,10 @@ button:disabled { opacity: .25; cursor: not-allowed; }
   color: var(--warning);
   cursor: help;
 }
+.party-defeated {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--bg); background: var(--accent); border-radius: 2px; padding: 0 4px; flex: none;
+}
 .party-injuries {
   font-family: var(--font-mono);
   font-size: 10px;

@@ -1246,6 +1246,8 @@ function readPartyMember(code) {
     spiritMax: r.snap?.spiritMax ?? null,
     exhaustion,
     injuries: Array.isArray(r.char?.injuries) ? r.char.injuries.length : 0,
+    // 1.6. Took an Injury it did not avoid: out of the scene until roused (creator 2.5).
+    defeated: r.char?.defeated === true,
     char: r.char,
     // 1.5. What this character can reroll with. Written into the snapshot by the creator,
     // which is the only half that knows the rules; this file only reads it.
@@ -1348,6 +1350,14 @@ function partyRow(member, status, initRow, init) {
       marks.append(mark);
     }
     head.append(marks);
+  }
+
+  if (member.defeated) {
+    const down = document.createElement("span");
+    down.className = "party-defeated";
+    down.textContent = "Defeated";
+    down.title = "Out of the scene until an ally rouses them: a Difficulty 2 Test, or 1 Momentum with a Combat Medkit.";
+    head.append(down);
   }
 
   if (member.injuries > 0) {
