@@ -145,6 +145,16 @@ export function readFight(room) {
       count: Math.max(1, Math.min(24, Math.round(Number(f.count) || 1))),
       revealed: f.revealed === true,
       pt: Math.max(0, Math.min(20, Math.round(Number(f.pt) || 0))),
+      // 1.6. Chapter 5's bookkeeping, all of it GM-local like the rest of the row.
+      startCount: Math.max(1, Math.min(24, Math.round(Number(f.startCount ?? f.count) || 1))),
+      side: R.SIDES.some((x) => x.id === f.side) ? f.side : "adversary",
+      injuries: Math.max(0, Math.min(20, Math.round(Number(f.injuries) || 0))),
+      payPt: f.payPt !== false,
+      extraRound: Number.isFinite(Number(f.extraRound)) ? Math.round(Number(f.extraRound)) : -1,
+      extraTurns: Math.max(0, Math.min(20, Math.round(Number(f.extraTurns) || 0))),
+      lastAction: f.lastAction && typeof f.lastAction === "object"
+        ? { d: Math.max(1, Math.min(20, Math.round(Number(f.lastAction.d) || 1))), name: cleanStr(f.lastAction.name, 40) }
+        : null,
     }));
 }
 export function writeFight(room, list) { writeJson(GM_KEYS.fight(room), list); }
@@ -163,6 +173,8 @@ export function readSettings() {
     // GM Guide p.125: "Naturally, this is up to the GM". On by default because it is the
     // rule; a switch because the book says it is the GM's call.
     awardGrowth: raw.awardGrowth !== false,
+    // 1.6. Off by default: it is not in the book (gmrules.js ARRIVAL_HOUSE_RULE).
+    arrivalThreat: raw.arrivalThreat === true,
   };
 }
 export function writeSettings(next) { writeJson(GM_KEYS.settings, { ...readSettings(), ...next }); }
@@ -431,17 +443,16 @@ export async function addNpcToFight(host, npc, count = 1) {
   rememberHiddenName(room, id, name);
   await host.announce({ type: "init", action: "add", id, name: "", kind: "npc", hidden: true });
   const fight = readFight(room);
-  fight.push({ rowId: id, npcId: npc.id, name, count: n, revealed: false, pt: npc.personalThreat });
+  fight.push({ rowId: id, npcId: npc.id, name, count: n, startCount: n, revealed: false, pt: npc.personalThreat, side: "adversary", injuries: 0 });
   writeFight(room, fight);
   appendGmLog(room, { id: uid() + "-gm", label: "Into the fight", detail: `${name}, hidden from the table`, pool: null, delta: 0 });
   host.changed();
   return { id };
 }
 
-// Entering the scene. Menacing is added once for the row, group or not: Chapter 4 says
-// only that Menacing NPCs generate Threat "simply by turning up", and how it scales with
-// a group is in Chapter 5, which was not to hand. Once per row is the reading that
-// cannot overcharge. Reinforcements are charged per the p.113 rule.
+// Entering the scene. Reinforcements are charged per the p.113 rule. Threat on arrival is
+// a HOUSE RULE since 1.6 (Chapter 5 prints Threatening, not Menacing) and is added only
+// while the GM has it switched on, once for the row, group or not.
 export async function revealFighter(host, rowId, { reinforcements = false } = {}) {
   const room = host.room();
   const fight = readFight(room);
@@ -458,10 +469,11 @@ export async function revealFighter(host, rowId, { reinforcements = false } = {}
       privateDetail: `${f.name}: ${f.count > 1 ? `a group of ${f.count}, half rounded up` : "one Normal NPC"}`,
     });
   }
-  if (npc && npc.menacing > 0) {
+  if (npc && npc.menacing > 0 && readSettings().arrivalThreat) {
     await gmThreat(host, npc.menacing, {
-      label: "Menacing",
+      label: "Threat rises",
       detail: `${f.name} enters the scene`,
+      privateLabel: "Arrival (house rule)",
     });
   }
   f.revealed = true;
@@ -477,7 +489,7 @@ export async function dropFighter(host, rowId) {
   host.changed();
 }
 
-export function spendPersonalThreat(host, rowId, delta) {
+export function spendPersonalThreat(host, rowId, delta, why = "") {
   const room = host.room();
   const fight = readFight(room);
   const f = fight.find((x) => x.rowId === rowId);
@@ -489,13 +501,150 @@ export function spendPersonalThreat(host, rowId, delta) {
   appendGmLog(room, {
     id: uid() + "-gm",
     label: "Personal Threat",
-    detail: `${f.name} ${delta < 0 ? "spent" : "regained"} ${Math.abs(next - f.pt)} (${next}/${max} left)`,
+    detail: `${f.name} ${delta < 0 ? "spent" : "regained"} ${Math.abs(next - f.pt)}${why ? ": " + why : ""} (${next}/${max} left)`,
     pool: null,
     delta: 0,
   });
   f.pt = next;
   writeFight(room, fight);
   host.changed();
+}
+
+// -------------------------------------------------------------
+// Chapter 5 at the table (1.6)
+// -------------------------------------------------------------
+function fighterAndNpc(host, rowId) {
+  const room = host.room();
+  const fight = readFight(room);
+  const f = fight.find((x) => x.rowId === rowId);
+  return { room, fight, f, npc: f ? findNpc(f.npcId) : null };
+}
+
+export function updateFighter(host, rowId, patch) {
+  const { room, fight, f } = fighterAndNpc(host, rowId);
+  if (!f) return;
+  Object.assign(f, patch);
+  writeFight(room, fight);
+  host.changed();
+}
+
+// What the table may be told about a fighter. A row still hidden in the order has no
+// name in the room, and the log must not give it one.
+const publicName = (f) => (f.revealed ? f.name.replace(/ ×\d+$/, "") : "An adversary");
+
+// The one way an NPC pays Threat (pp.126, 127, 129). Personal Threat first when it has
+// some and the GM has not switched that off; otherwise the GM's pool, and an NPC cannot
+// spend what is not there. An ALLY adds the amount to Threat instead — unless it is
+// paying from its own Personal Threat, which it spends "as normal".
+export async function npcSpend(host, rowId, amount, { what = "uses an ability", publicWhat = null, pool = null } = {}) {
+  const { f } = fighterAndNpc(host, rowId);
+  if (!f) return { error: "That NPC is no longer in the fight." };
+  const n = Math.max(0, Math.min(20, Math.round(Number(amount) || 0)));
+  if (!n) return { error: "That costs nothing." };
+  const usePt = pool === "pt" || (pool === null && f.payPt && f.pt > 0);
+  if (usePt) {
+    if (f.pt < n) return { error: `${f.name} has only ${f.pt} Personal Threat.` };
+    spendPersonalThreat(host, rowId, -n, `${what}`);
+    return { paid: "pt", amount: n };
+  }
+  if (f.side === "ally") {
+    await gmThreat(host, n, {
+      label: "Ally",
+      detail: `${publicWhat || publicName(f) + " " + what}: added ${n} Threat`,
+      privateLabel: `Ally: ${f.name}`,
+      privateDetail: `${what}, added ${n} Threat instead of spending it`,
+    });
+    return { paid: "ally", amount: n };
+  }
+  const have = Math.max(0, Math.round(Number(host.state().threat) || 0));
+  if (have < n) return { error: `Only ${have} Threat in the pool: ${f.name} cannot spend ${n}.` };
+  await gmThreat(host, -n, { pub: false, label: f.name, privateLabel: f.name, privateDetail: `${what} (${n} Threat)` });
+  return { paid: "threat", amount: n };
+}
+
+// One Injury landed. A group loses one of its number (each is defeated by one, p.128);
+// anything else counts towards its limit (pp.127, 129). GM bookkeeping only.
+export function injureFighter(host, rowId, delta = 1) {
+  const { room, fight, f, npc } = fighterAndNpc(host, rowId);
+  if (!f) return null;
+  const d = delta < 0 ? -1 : 1;
+  let note;
+  if (f.startCount > 1) {
+    f.count = Math.max(0, Math.min(f.startCount, f.count - d));
+    note = d > 0 ? `one falls, ${f.count} of ${f.startCount} left` : `one back up, ${f.count} of ${f.startCount}`;
+  } else {
+    const limit = R.defeatLimit(npc);
+    f.injuries = Math.max(0, Math.min(limit, f.injuries + d));
+    note = `${f.injuries} of ${limit} Injuries${f.injuries >= limit ? ": defeated" : ""}`;
+  }
+  appendGmLog(room, { id: uid() + "-gm", label: d > 0 ? "Injury" : "Injury undone", detail: `${f.name}: ${note}`, pool: null, delta: 0 });
+  writeFight(room, fight);
+  host.changed();
+  return fighterDefeated(f, npc);
+}
+
+export function fighterDefeated(f, npc) {
+  if (!f) return false;
+  if (f.startCount > 1) return f.count <= 0;
+  return f.injuries >= R.defeatLimit(npc);
+}
+
+// Threatening (p.130): +1 at the start of each of its actions. Public, like any gain, and
+// the row is ticked as having acted so the party panel keeps count.
+export async function threateningAct(host, rowId) {
+  const { f } = fighterAndNpc(host, rowId);
+  if (!f) return;
+  await gmThreat(host, 1, { label: "Threatening", detail: `${publicName(f)} acts: added 1 Threat`, privateDetail: `${f.name} acts` });
+  await host.announce({ type: "init", action: "act", id: rowId, acted: true });
+}
+
+// Solitary (p.131): the first extra turn this round costs 1, the next 2, and so on. The
+// count resets when the round number moves on.
+export async function solitaryTurn(host, rowId) {
+  const { f } = fighterAndNpc(host, rowId);
+  if (!f) return null;
+  const round = readInitiative(host.state())?.round ?? 0;
+  const taken = f.extraRound === round ? f.extraTurns : 0;
+  const cost = R.solitaryCost(taken);
+  const r = await npcSpend(host, rowId, cost, { what: `takes extra turn ${taken + 1} this round (Solitary)` });
+  if (!r.error) updateFighter(host, rowId, { extraRound: round, extraTurns: taken + 1 });
+  return r;
+}
+
+export function solitaryNextCost(host, f) {
+  const round = readInitiative(host.state())?.round ?? 0;
+  return R.solitaryCost(f.extraRound === round ? f.extraTurns : 0);
+}
+
+// Hunt (p.131): the successes on its Insight (Study) roll become Threat.
+export async function huntGain(host, rowId, successes) {
+  const { f } = fighterAndNpc(host, rowId);
+  const n = Math.max(0, Math.min(20, Math.round(Number(successes) || 0)));
+  if (!f || !n) return;
+  await gmThreat(host, n, { label: "Hunt", detail: `${publicName(f)} watches and waits: added ${n} Threat`, privateDetail: `${f.name}: ${n} success${n === 1 ? "" : "es"} on Hunt` });
+}
+
+// Retreat (p.131): it leaves the scene, and Threat rises by the Injuries it could still
+// have taken. The Thrall's own Tomorrow's Problem is this with X = 1.
+export async function retreatFighter(host, rowId) {
+  const { f, npc } = fighterAndNpc(host, rowId);
+  if (!f) return;
+  const x = R.injuriesLeft(npc, f);
+  if (x) await gmThreat(host, x, { label: "Retreat", detail: `${publicName(f)} withdraws: added ${x} Threat`, privateDetail: `${f.name} retreats with ${x} Injur${x === 1 ? "y" : "ies"} to spare` });
+  await dropFighter(host, rowId);
+}
+
+// A Major NPC's d20 action table (p.129). Rolled here, told only to the GM.
+export function rollFighterAction(host, rowId, d20 = null) {
+  const { room, fight, f, npc } = fighterAndNpc(host, rowId);
+  if (!f || !npc) return null;
+  const d = d20 || (1 + Math.floor(Math.random() * 20));
+  const a = R.actionForRoll(npc, d);
+  f.lastAction = { d, name: a ? a.name : "" };
+  appendGmLog(room, { id: uid() + "-gm", label: "Action roll", detail: `${f.name}: ${d} — ${a ? a.name : "no action on that number"}`, pool: null, delta: 0 });
+  writeFight(room, fight);
+  host.changed();
+  return { d, action: a };
 }
 
 // Puts an NPC on the selected token. Only the opaque roster id — see npcTokenRef().
@@ -514,6 +663,21 @@ export async function attachNpcToSelected(host, npc) {
   });
   if (refused) return { error: "That token carries a character. Pick another." };
   return { ok: true };
+}
+
+// 1.6. A new token for an NPC, in the middle of the GM's view. A popover cannot drag
+// onto the map — it is a separate document Owlbear places over it, and the SDK has no
+// drag-and-drop — so the press puts the token where the GM is looking, HIDDEN, carrying
+// only the opaque id. The GM moves it and shows it like any other token.
+export const NPC_TOKEN_URL = new URL("./npc-token.svg", import.meta.url).href;
+
+export async function placeNpcOnMap(host, npc) {
+  if (!host.addItems) return { error: "Placing tokens needs the room's map." };
+  const [playerId, at] = await Promise.all([host.playerId(), host.viewCenter()]);
+  const item = R.buildNpcTokenItem({ url: NPC_TOKEN_URL, playerId, position: at, id: crypto.randomUUID() });
+  item.metadata[NPC_KEY] = R.npcTokenRef(npc);
+  await host.addItems([item]);
+  return { ok: true, id: item.id };
 }
 
 export async function detachNpcFromSelected(host) {
@@ -647,7 +811,7 @@ function stepper(value, { min, max, onChange, label }) {
 // A refresh while the GM is typing in one of its fields would throw the field away
 // mid-word, so a refresh that lands then only updates the Threat readout and leaves the
 // rest for when focus leaves the field.
-const SECTION_DEFAULTS = { tickers: true, gain: true, spend: false, hazard: false, setup: false, npcs: false, log: false, ref: false };
+const SECTION_DEFAULTS = { tickers: true, gain: true, spend: false, hazard: false, setup: false, fight: true, bestiary: false, log: false, ref: false };
 
 function readUi() {
   const raw = readJson(GM_KEYS.ui, {});
@@ -683,7 +847,8 @@ export function mountGmPanel(root, host, opts = {}) {
   const inputs = {
     gain: {}, spend: {}, reinforcementsGroup: true,
     hazard: { name: "", damage: 0, targets: 0, breaker: false, nonLethal: false, blast: false, avoid: "normal" },
-    pcs: null, reversalPcs: null, rosterFilter: "", fightCount: {}, viewing: null,
+    pcs: null, reversalPcs: null, rosterFilter: "", rosterKind: "all", fightCount: {}, viewing: null,
+    avoid: {}, hunt: {}, cost: {}, fightOpen: null,
     editing: null, importing: false, importText: "", tickerPreset: 0,
   };
   let dirty = false;
@@ -1020,6 +1185,11 @@ export function mountGmPanel(root, host, opts = {}) {
     tip(growth, { title: "Growth from adversity", quote: R.GROWTH_RULE.quote, page: R.GROWTH_RULE.page,
       note: "Applies to every spend of 3 or more from these tools or the roller's − button. Each sheet adds it the next time it is open, up to the 10 unspent Growth a character may hold." });
     body.append(growth);
+    const arrival = h("label", { class: "gmt-check gmt-growth", tabindex: "0" },
+      h("input", { type: "checkbox", checked: settings.arrivalThreat, onchange: (e) => { writeSettings({ arrivalThreat: e.target.checked }); host.changed(); } }),
+      R.ARRIVAL_HOUSE_RULE.label);
+    tip(arrival, { title: R.ARRIVAL_HOUSE_RULE.label, quote: R.MENACING_RULE.quote, page: R.MENACING_RULE.page, note: R.ARRIVAL_HOUSE_RULE.note });
+    body.append(arrival);
     return body;
   }
 
@@ -1033,30 +1203,215 @@ export function mountGmPanel(root, host, opts = {}) {
     return `${npc.truth || "Truth"} ${npc.main.attr}/${npc.main.skill} · Default ${npc.fallback.attr}/${npc.fallback.skill}`;
   }
 
+  // A stat block line's name, with the book's wording on hover when it is one of the
+  // common abilities or actions (pp.130-131).
+  function abilityName(name, extra) {
+    const key = R.abilityKey(name);
+    const lib = key && R.abilityByKey(key);
+    const b = h("b", { class: lib ? "gmt-has-tip" : "", tabindex: lib ? "0" : null, text: name + (extra || "") });
+    if (lib) tip(b, { title: lib.label, quote: lib.quote, page: lib.page });
+    return b;
+  }
+
+  function fact(text, t) {
+    const el = h("span", { class: "gmt-fact", tabindex: t ? "0" : null, text });
+    if (t) tip(el, t);
+    return el;
+  }
+
+  function competenceLabel(attr, skill) {
+    const c = R.competenceOf(attr, skill);
+    return c ? c.label : "";
+  }
+
   function renderStatblock(npc) {
     const box = h("div", { class: "gmt-statblock" });
-    box.append(h("div", { class: "gmt-sb-line", text: statLine(npc) }));
-    const facts = [];
     if (npc.kind === "major") {
-      if (npc.truths.length) facts.push(`Truths: ${npc.truths.join("; ")}`);
-      facts.push(`Defeated after ${npc.defeat} Injur${npc.defeat === 1 ? "y" : "ies"}`);
-      facts.push(`Personal Threat ${npc.personalThreat}`);
+      if (npc.truths.length) box.append(h("div", { class: "gmt-sb-truth", text: npc.truths.join(" · ") }));
+      box.append(h("div", { class: "gmt-sb-grid" },
+        R.NPC_ATTRS.map((k) => h("span", { class: "gmt-sb-cell" }, h("small", { text: ATTRS[k] }), String(npc.attrs[k])))));
+      box.append(h("div", { class: "gmt-sb-grid is-skills" },
+        R.NPC_SKILLS.map((k) => h("span", { class: "gmt-sb-cell" }, h("small", { text: SKILLS[k] }), String(npc.skills[k])))));
+    } else {
+      const main = competenceLabel(npc.main.attr, npc.main.skill);
+      const def = competenceLabel(npc.fallback.attr, npc.fallback.skill);
+      const pair = h("div", { class: "gmt-sb-grid is-normal", tabindex: "0" },
+        h("span", { class: "gmt-sb-cell" }, h("small", { text: npc.truth || "Truth" }), `${npc.main.attr} / ${npc.main.skill}`, main ? h("em", { text: main }) : null),
+        h("span", { class: "gmt-sb-cell" }, h("small", { text: "Default" }), `${npc.fallback.attr} / ${npc.fallback.skill}`, def ? h("em", { text: def }) : null));
+      tip(pair, { title: "Truth and Default", quote: R.NORMAL_NPC_RULE.quote, page: R.NORMAL_NPC_RULE.page,
+        note: "Competence (p.128) is shown under each pair where the numbers match the table." });
+      box.append(pair);
     }
-    if (npc.menacing) facts.push(`Menacing ${npc.menacing}`);
-    if (npc.protection) facts.push(`Protection ${npc.protection}`);
-    if (facts.length) box.append(h("div", { class: "gmt-sb-facts", text: facts.join(" · ") }));
+    const facts = h("div", { class: "gmt-sb-facts" });
+    const limit = R.defeatLimit(npc);
+    facts.append(fact(`Defeat: ${limit} Injur${limit === 1 ? "y" : "ies"}`, npc.kind === "major"
+      ? { title: "Defeat", quote: R.MAJOR_DEFEAT_RULE.quote, page: R.MAJOR_DEFEAT_RULE.page, note: npc.defeat ? null : "No number set, so Truths + 1." }
+      : { title: "Defeat", quote: R.NORMAL_DEFEAT_RULE.quote, page: R.NORMAL_DEFEAT_RULE.page }));
+    if (npc.personalThreat) facts.append(fact(`Personal Threat ${npc.personalThreat}`, { title: "Personal Threat", quote: R.MAJOR_PT_RULE.quote, page: R.MAJOR_PT_RULE.page }));
+    if (npc.protection || npc.rangedProtection) {
+      const arm = R.abilityByKey("armored");
+      facts.append(fact(`Protection ${npc.protection}${npc.rangedProtection ? ` (+${npc.rangedProtection} vs ranged)` : ""}`, { title: "Protection", quote: arm.quote, page: arm.page }));
+    }
+    if (npc.menacing && readSettings().arrivalThreat) facts.append(fact(`Arrival +${npc.menacing}`, { title: R.ARRIVAL_HOUSE_RULE.label, note: R.ARRIVAL_HOUSE_RULE.note }));
+    box.append(facts);
+    if (npc.weapons.length) box.append(h("div", { class: "gmt-sb-head", text: "Weapons" }));
     for (const w of npc.weapons) {
       box.append(h("div", { class: "gmt-sb-item" }, h("b", { text: w.name }),
         ` (${w.range || "—"}): ${w.damage || "—"}${w.qualities ? ", " + w.qualities : ""}`));
     }
-    for (const a of npc.actions) {
-      box.append(h("div", { class: "gmt-sb-item" }, h("b", { text: a.name + (a.roll ? ` (${a.roll})` : "") }), `: ${a.text}`));
+    if (npc.actions.length) {
+      const head = h("div", { class: "gmt-sb-head", tabindex: npc.kind === "major" ? "0" : null, text: R.hasActionTable(npc) ? "Actions (d20)" : "Actions" });
+      if (npc.kind === "major") tip(head, { title: "Special Actions", quote: R.MAJOR_ACTIONS_RULE.quote, page: R.MAJOR_ACTIONS_RULE.page });
+      box.append(head);
     }
-    for (const a of npc.abilities) {
-      box.append(h("div", { class: "gmt-sb-item" }, h("b", { text: a.name }), `: ${a.text}`));
-    }
+    for (const a of npc.actions) box.append(h("div", { class: "gmt-sb-item" }, abilityName(a.name, a.roll ? ` (${a.roll})` : ""), `: ${a.text}`));
+    if (npc.abilities.length) box.append(h("div", { class: "gmt-sb-head", text: "Special abilities" }));
+    for (const a of npc.abilities) box.append(h("div", { class: "gmt-sb-item" }, abilityName(a.name), `: ${a.text}`));
     if (npc.notes) box.append(h("div", { class: "gmt-sb-notes", text: npc.notes }));
     if (npc.source) box.append(h("div", { class: "gmt-sb-source", text: npc.source }));
+    return box;
+  }
+
+  // The fighter's own tools: everything Chapter 5 lets an NPC do that touches Threat or
+  // its Injuries. Drawn when its name is opened.
+  function renderFighterTools(f, npc) {
+    const box = h("div", { class: "gmt-tools" });
+    const ally = f.side === "ally";
+    const run = async (p) => { const r = await p; if (r && r.error) status(r.error); return r; };
+    const costLabel = (c) => (ally && !(f.payPt && f.pt >= c) ? `+${c}` : `−${c}`);
+    const costPrompt = (c) => (ally && !(f.payPt && f.pt >= c) ? `Add ${c}?` : `Spend ${c}?`);
+
+    // Who it is to the characters (p.126), and what that does to its spending (p.127).
+    box.append(h("div", { class: "segmented gmt-side" }, R.SIDES.map((sd) => {
+      const b = h("button", { type: "button", class: f.side === sd.id ? "on" : "", text: sd.label,
+        onclick: () => updateFighter(host, f.rowId, { side: sd.id }) });
+      tip(b, { title: sd.label, quote: sd.quote, page: sd.page, note: sd.id === "ally" ? `${R.ALLY_RULE.quote} (GM Guide p.${R.ALLY_RULE.page})` : null });
+      return b;
+    })));
+
+    // Injuries and defeat.
+    const limit = R.defeatLimit(npc);
+    const group = f.startCount > 1;
+    const down = fighterDefeated(f, npc);
+    const count = h("span", { class: "gmt-fact" + (down ? " is-down" : ""), tabindex: "0",
+      text: group ? `${f.count} of ${f.startCount} standing` : `Injuries ${f.injuries}/${limit}` });
+    tip(count, group
+      ? { title: R.GROUP_RULES.defeat.label, quote: R.GROUP_RULES.defeat.quote, page: R.GROUP_RULES.defeat.page }
+      : npc.kind === "major"
+        ? { title: "Defeat", quote: R.MAJOR_DEFEAT_RULE.quote, page: R.MAJOR_DEFEAT_RULE.page }
+        : { title: "Defeat", quote: R.NORMAL_DEFEAT_RULE.quote, page: R.NORMAL_DEFEAT_RULE.page });
+    box.append(h("div", { class: "gmt-row gmt-wrap" }, count,
+      h("button", { type: "button", class: "gm-btn", text: group ? "One falls" : "Injury", disabled: down,
+        title: "Record an Injury it did not avoid. Your notes only.", onclick: () => injureFighter(host, f.rowId, 1) }),
+      h("button", { type: "button", class: "ghost gm-step", text: "−", title: "Undo the last Injury",
+        disabled: group ? f.count >= f.startCount : f.injuries <= 0, onclick: () => injureFighter(host, f.rowId, -1) }),
+      down ? h("span", { class: "gmt-tag is-down", text: "Defeated" }) : null));
+
+    // Avoid an Injury (pp.126, 130).
+    const av = inputs.avoid[f.rowId] || (inputs.avoid[f.rowId] = { damage: 2, breaker: false, ranged: false, defending: false });
+    const keys = R.npcKeys(npc);
+    const avoidCost = () => R.avoidInjuryCost({ damage: av.damage, protection: npc.protection, rangedProtection: npc.rangedProtection, ranged: av.ranged, defending: av.defending, breaker: av.breaker });
+    const shown = h("span", { class: "gmt-cost" });
+    const avoidBtn = actionButton("Avoid the Injury", ally ? "gmt-gain" : "gmt-spend",
+      { title: "Avoid an Injury", quote: R.NPC_SPEND_RULE.quote, page: R.NPC_SPEND_RULE.page,
+        note: `Costs the attack's damage rating less Protection${npc.protection ? ` (${npc.protection}, halved by Breaker)` : ""}. Paid from Personal Threat first when it has enough and the box below is ticked; an ally adds to Threat instead.` },
+      () => costPrompt(avoidCost()),
+      async () => {
+        const c = avoidCost();
+        if (!c) { status("Protection stops it: there is nothing to pay."); return; }
+        const r = await run(npcSpend(host, f.rowId, c, { what: "avoids an Injury", publicWhat: "Injury avoided" }));
+        if (r && !r.error) status(`${f.name} avoids the Injury.`);
+      });
+    const upd = () => { const c = avoidCost(); shown.textContent = c ? `= ${costLabel(c)}` : "= nothing"; };
+    const chk = (k, label, t) => {
+      const l = h("label", { class: "gmt-check", tabindex: t ? "0" : null },
+        h("input", { type: "checkbox", checked: av[k], onchange: (e) => { av[k] = e.target.checked; upd(); } }), label);
+      if (t) tip(l, t);
+      return l;
+    };
+    box.append(h("div", { class: "gmt-subhead", text: "Avoid an Injury" }),
+      h("div", { class: "gmt-row gmt-wrap" },
+        h("span", { class: "gmt-mini", text: "damage" }),
+        stepper(av.damage, { min: 0, max: 12, label: "damage", onChange: (v) => { av.damage = v; upd(); } }),
+        chk("breaker", "Breaker", { title: "Breaker", quote: R.abilityByKey("armored").quote, page: 130 }),
+        npc.rangedProtection ? chk("ranged", "ranged attack") : null,
+        keys.has("defend") ? chk("defending", "Defending (+2)", { title: "Defend", quote: R.abilityByKey("defend").quote, page: 131 }) : null,
+        shown, avoidBtn));
+    upd();
+    if (f.pt > 0 || (npc.personalThreat > 0)) {
+      box.append(h("label", { class: "gmt-check", tabindex: "0" },
+        h("input", { type: "checkbox", checked: f.payPt, onchange: (e) => updateFighter(host, f.rowId, { payPt: e.target.checked }) }),
+        `Pay from Personal Threat first (${f.pt} left)`));
+    }
+
+    // A group (p.128).
+    if (group) {
+      const bonus = R.groupDefenceBonus(f.count);
+      const g = h("span", { class: "gmt-fact", tabindex: "0", text: `Attacks on it: +${bonus} Difficulty while it can defend` });
+      tip(g, { title: R.GROUP_RULES.attack.label, quote: R.GROUP_RULES.attack.quote, page: R.GROUP_RULES.attack.page });
+      const hits = h("span", { class: "gmt-fact", tabindex: "0", text: "Extra hits: 2 Momentum each (1 with Burst)" });
+      tip(hits, { title: R.GROUP_RULES.defeat.label, quote: R.GROUP_RULES.defeat.quote, page: R.GROUP_RULES.defeat.page });
+      const lead = h("span", { class: "gmt-fact", tabindex: "0", text: "Tests: one leads, the rest assist" });
+      tip(lead, { title: R.GROUP_RULES.action.label, quote: R.GROUP_RULES.action.quote, page: R.GROUP_RULES.action.page });
+      box.append(h("div", { class: "gmt-subhead", text: "Group" }), h("div", { class: "gmt-row gmt-wrap" }, g, hits, lead,
+        actionButton(`Counter-attack ${costLabel(R.COUNTER_ATTACK_COST)}`, ally ? "gmt-gain" : "gmt-spend",
+          { title: "Counter-attack", quote: R.GROUP_RULES.attack.quote, page: R.GROUP_RULES.attack.page, note: "Only for a group that had the defence bonus, after an attack on it misses." },
+          costPrompt(R.COUNTER_ATTACK_COST),
+          () => run(npcSpend(host, f.rowId, R.COUNTER_ATTACK_COST, { what: "counter-attacks" })))));
+    }
+
+    // Its abilities and actions that have a price or a payout.
+    const btns = h("div", { class: "gmt-row gmt-wrap" });
+    const lib = (k) => R.abilityByKey(k);
+    if (keys.has("threatening")) {
+      btns.append(actionButton("Acts: +1 Threat", "gmt-gain", { title: "Threatening", quote: lib("threatening").quote, page: 130, note: "Adds 1 to Threat and ticks its row as having acted." },
+        "Add 1?", () => threateningAct(host, f.rowId)));
+    }
+    if (keys.has("solitary")) {
+      const c = solitaryNextCost(host, f);
+      btns.append(actionButton(`Extra turn ${costLabel(c)}`, ally ? "gmt-gain" : "gmt-spend", { title: "Solitary", quote: lib("solitary").quote, page: 131, note: "The count starts again each round." },
+        costPrompt(c), () => run(solitaryTurn(host, f.rowId))));
+    }
+    if (keys.has("hunt")) {
+      const n = inputs.hunt[f.rowId] ?? 1;
+      btns.append(h("span", { class: "gmt-cell" },
+        actionButton("Hunt", "gmt-gain", { title: "Hunt", quote: lib("hunt").quote, page: 131, note: "Roll its Insight (Study) at Difficulty 0, then set the successes here." },
+          () => `Add ${inputs.hunt[f.rowId] ?? 1}?`, () => huntGain(host, f.rowId, inputs.hunt[f.rowId] ?? 1)),
+        stepper(n, { min: 1, max: 10, label: "successes", onChange: (v) => { inputs.hunt[f.rowId] = v; } })));
+    }
+    const retreatText = (npc.actions || []).some((a) => /retreat/i.test(a.name + " " + a.text));
+    if (keys.has("retreat") || retreatText) {
+      const x = R.injuriesLeft(npc, f);
+      btns.append(actionButton(`Retreat +${x}`, "gmt-gain", { title: "Retreat", quote: lib("retreat").quote, page: 131, note: "Adds the Threat and takes it out of the fight." },
+        `Add ${x} and remove?`, () => retreatFighter(host, f.rowId)));
+    }
+    const handled = new Set(["threatening", "solitary", "hunt", "retreat"]);
+    for (const a of [...npc.actions, ...npc.abilities]) {
+      const k = R.abilityKey(a.name);
+      if (k && handled.has(k)) continue;
+      const range = R.threatCostIn(a.text) || (k && lib(k).cost ? { min: lib(k).cost, max: lib(k).cost } : null);
+      if (!range) continue;
+      const key = f.rowId + ":" + a.name;
+      const amount = () => Math.max(range.min, Math.min(range.max, inputs.cost[key] ?? range.min));
+      const t = k ? { title: lib(k).label, quote: lib(k).quote, page: lib(k).page, note: `This stat block: ${a.text}` } : { title: a.name, note: a.text };
+      const b = actionButton(range.min === range.max ? `${a.name} ${costLabel(range.min)}` : a.name, ally ? "gmt-gain" : "gmt-spend", t,
+        () => costPrompt(amount()), () => run(npcSpend(host, f.rowId, amount(), { what: `uses ${a.name}` })));
+      btns.append(range.min === range.max ? b : h("span", { class: "gmt-cell" }, b,
+        stepper(amount(), { min: range.min, max: range.max, label: "Threat", onChange: (v) => { inputs.cost[key] = v; } })));
+    }
+    if (btns.childNodes.length) box.append(h("div", { class: "gmt-subhead", text: "Abilities and actions" }), btns);
+
+    // A Major NPC's action table (p.129).
+    if (R.hasActionTable(npc)) {
+      const last = f.lastAction;
+      const res = h("span", { class: "gmt-fact", text: last ? `Rolled ${last.d}: ${last.name || "nothing on that number"}` : "Not rolled yet" });
+      const roll = h("button", { type: "button", class: "gm-btn", text: "Roll its action (d20)", onclick: () => {
+        const r = rollFighterAction(host, f.rowId);
+        if (r) status(`${f.name}: ${r.d} — ${r.action ? r.action.name : "no action on that number"}.`);
+      } });
+      tip(roll, { title: "Special Actions", quote: R.MAJOR_ACTIONS_RULE.quote, page: R.MAJOR_ACTIONS_RULE.page, note: "Rolled here and told only to you, in your own log." });
+      box.append(h("div", { class: "gmt-row gmt-wrap" }, roll, res));
+    }
     return box;
   }
 
@@ -1071,102 +1426,114 @@ export function mountGmPanel(root, host, opts = {}) {
     // cleared where the fight actually ends (End Scene, End) instead.
     const fight = readFight(room).filter((f) => rows.has(f.rowId));
     const body = h("div", { class: "gmt-fight" });
-    body.append(h("div", { class: "gmt-subhead", text: "In this fight" }));
     if (!fight.length) {
-      body.append(h("p", { class: "gm-note", text: "No NPCs from the roster in the order. Add one below; it goes in hidden." }));
+      body.append(h("p", { class: "gm-note", text: "No NPCs in the order. Add one from the Bestiary; it goes in hidden." }));
       return body;
     }
     for (const f of fight) {
       const npc = findNpc(f.npcId);
-      const row = h("div", { class: "gmt-fighter" + (f.revealed ? "" : " is-hidden") },
-        h("span", { class: "gmt-fighter-name", text: f.name }),
-        h("span", { class: "init-hidden-mark", hidden: f.revealed, text: "hidden" }));
+      const open = inputs.fightOpen === f.rowId;
+      const down = npc && fighterDefeated(f, npc);
+      const row = h("div", { class: "gmt-fighter" + (f.revealed ? "" : " is-hidden") + (down ? " is-down" : "") },
+        h("button", { type: "button", class: "gmt-fighter-name", "aria-expanded": open ? "true" : "false", text: (open ? "▾ " : "▸ ") + f.name,
+          title: "Show its tools and stat block",
+          onclick: () => { inputs.fightOpen = open ? null : f.rowId; render(); } }),
+        f.side !== "adversary" ? h("span", { class: "gmt-tag", text: f.side === "ally" ? "Ally" : "Bystander" }) : null,
+        h("span", { class: "init-hidden-mark", hidden: f.revealed, text: "hidden" }),
+        npc ? h("span", { class: "gmt-mini", text: f.startCount > 1 ? `${f.count}/${f.startCount}` : `${f.injuries}/${R.defeatLimit(npc)} inj` }) : null);
       if (!f.revealed) {
-        const menace = npc && npc.menacing ? ` and adds ${npc.menacing} Threat for Menacing` : "";
+        const arrive = npc && npc.menacing && readSettings().arrivalThreat ? ` and adds ${npc.menacing} Threat (house rule)` : "";
         row.append(
-          actionButton("Reveal", "", { title: "It enters the scene", quote: R.MENACING_RULE.quote, page: R.MENACING_RULE.page,
-            note: `Shows its name in the order${menace}. Menacing is added once per row: how it scales for a group is in Chapter 5.` },
+          actionButton("Reveal", "", { title: "It enters the scene", note: `Shows its name in the order${arrive}.` },
             "Reveal?", () => revealFighter(host, f.rowId, { reinforcements: false })),
           actionButton("Arrives", "", { title: "Arrives as reinforcements", quote: R.SPEND_RULES.find((r) => r.id === "reinforcements").quote, page: 113,
-            note: `Reveals it and spends ${R.reinforcementCost(f.count, f.count > 1)} Threat for reinforcements${menace}.` },
-            `Spend ${R.reinforcementCost(f.count, f.count > 1)}?`, () => revealFighter(host, f.rowId, { reinforcements: true })),
+            note: `Reveals it and spends ${R.reinforcementCost(f.startCount, f.startCount > 1)} Threat for reinforcements${arrive}.` },
+            `Spend ${R.reinforcementCost(f.startCount, f.startCount > 1)}?`, () => revealFighter(host, f.rowId, { reinforcements: true })),
         );
       }
       if (npc && npc.personalThreat > 0) {
         const pt = h("span", { class: "gmt-pt", tabindex: "0", text: `PT ${f.pt}/${npc.personalThreat}` });
         tip(pt, { title: "Personal Threat", quote: R.PERSONAL_THREAT_RULE.quote, page: R.PERSONAL_THREAT_RULE.page,
-          note: "Kept in your browser only. It refills at End Scene." });
+          note: "It comes into each scene full. Kept in your browser only." });
         row.append(pt,
           h("button", { type: "button", class: "ghost gm-step", text: "−", title: "Spend 1 Personal Threat", disabled: f.pt <= 0, onclick: () => spendPersonalThreat(host, f.rowId, -1) }),
           h("button", { type: "button", class: "ghost gm-step", text: "+", title: "Give back 1 Personal Threat", disabled: f.pt >= npc.personalThreat, onclick: () => spendPersonalThreat(host, f.rowId, 1) }));
       }
       row.append(actionButton("×", "ghost init-drop", { title: "Take out of the fight" }, "Remove?", () => dropFighter(host, f.rowId)));
       body.append(row);
-      if (npc && inputs.viewing === "fight:" + f.rowId) body.append(renderStatblock(npc));
-      row.querySelector(".gmt-fighter-name").addEventListener("click", () => {
-        inputs.viewing = inputs.viewing === "fight:" + f.rowId ? null : "fight:" + f.rowId;
-        render();
-      });
+      if (open && npc) body.append(renderFighterTools(f, npc), renderStatblock(npc));
+      else if (open) body.append(h("p", { class: "gm-note", text: "Its stat block is not in this browser's Bestiary." }));
     }
     return body;
   }
 
-  function renderRoster() {
+  function renderBestiary() {
     const body = h("div", { class: "gmt-roster" });
     const roster = readRoster();
     const filter = inputs.rosterFilter.trim().toLowerCase();
-    const shown = roster.filter((n) => !filter || n.name.toLowerCase().includes(filter) || (n.truth || "").toLowerCase().includes(filter));
-    body.append(h("div", { class: "gmt-subhead", text: `Roster (${roster.length})` }));
-    body.append(h("div", { class: "gmt-row" },
-      h("input", { type: "text", class: "gmt-filter", placeholder: "Find…", value: inputs.rosterFilter,
-        oninput: (e) => { inputs.rosterFilter = e.target.value; const list = e.target.closest(".gmt-roster"); list && list.replaceWith(renderRoster()); const f = root.querySelector(".gmt-filter"); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } } }),
+    const shown = roster.filter((n) => (inputs.rosterKind === "all" || n.kind === inputs.rosterKind)
+      && (!filter || n.name.toLowerCase().includes(filter) || (n.truth || "").toLowerCase().includes(filter) || n.truths.some((t) => t.toLowerCase().includes(filter))));
+    body.append(h("div", { class: "gmt-row gmt-wrap" },
+      h("input", { type: "text", class: "gmt-filter", placeholder: `Find among ${roster.length}…`, value: inputs.rosterFilter,
+        oninput: (e) => { inputs.rosterFilter = e.target.value; const list = e.target.closest(".gmt-roster"); list && list.replaceWith(renderBestiary()); const f = root.querySelector(".gmt-filter"); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } } }),
+      h("div", { class: "segmented gmt-kind" }, [["all", "All"], ["normal", "Normal"], ["major", "Major"]].map(([k, label]) => h("button", {
+        type: "button", class: inputs.rosterKind === k ? "on" : "", text: label, onclick: () => { inputs.rosterKind = k; render(); } }))),
       h("button", { type: "button", class: "gm-btn", text: "New stat block", onclick: () => { inputs.editing = blankDraft(); render(); } }),
     ));
     if (roster.some((n) => n.sample)) {
-      body.append(h("p", { class: "gm-note gmt-sample-note", text: "Entries marked SAMPLE are placeholders built in the book's stat block shape, not stat blocks from the book. Replace them with Chapter 5's." }));
+      body.append(h("p", { class: "gm-note gmt-sample-note", text: "SAMPLE entries are placeholders in the book's shape, not the book's creatures. Import the Chapter 5 roster file to add those." }));
     }
     for (const npc of shown) {
       const count = inputs.fightCount[npc.id] ?? 1;
+      const open = inputs.viewing === npc.id;
       const row = h("div", { class: "gmt-npc" },
-        h("button", { type: "button", class: "gmt-npc-name", text: npc.name, title: "Show the stat block",
-          onclick: () => { inputs.viewing = inputs.viewing === npc.id ? null : npc.id; render(); } }),
+        h("button", { type: "button", class: "gmt-npc-name", "aria-expanded": open ? "true" : "false", text: (open ? "▾ " : "▸ ") + npc.name, title: "Show the stat block",
+          onclick: () => { inputs.viewing = open ? null : npc.id; render(); } }),
         h("span", { class: "gmt-tag", text: npc.kind === "major" ? "Major" : "Normal" }),
-        npc.menacing ? h("span", { class: "gmt-tag is-threat", text: `Menacing ${npc.menacing}` }) : null,
         npc.sample ? h("span", { class: "gmt-tag is-sample", text: "Sample" }) : null,
+        h("span", { class: "gmt-npc-line", text: statLine(npc) }),
       );
       const actions = h("div", { class: "gmt-npc-actions" },
         stepper(count, { min: 1, max: 24, label: "in the group", onChange: (v) => { inputs.fightCount[npc.id] = v; } }),
         actionButton("Into fight", "", { title: "Add to the initiative order, hidden",
-          note: "Goes into the order as a hidden row: the table sees \"Hidden\" until you press Reveal or Arrives below. More than one makes a single group row. Starts initiative if it is not running." },
+          note: "Goes into the order as a hidden row: the table sees \"Hidden\" until you press Reveal or Arrives under In this fight. More than one makes a single group row (p.128). Starts initiative if it is not running." },
           "Add hidden?", async () => {
             const r = await addNpcToFight(host, npc, inputs.fightCount[npc.id] ?? 1);
             status(r && r.error ? r.error : `${npc.name} is in the order, hidden.`);
           }),
-        actionButton("Token", "", { title: "Attach to the selected token",
-          note: "The token gets an anonymous id only, never the name or the stats, so players learn nothing from it. Select it later and the roller fills in this stat block for you." },
+        actionButton("On token", "", { title: "Attach to the selected token",
+          note: "Select one token on the map first. It gets an anonymous id only, never the name or the stats, so players learn nothing from it. Select it later and the roller fills in this stat block." },
           "Attach?", async () => {
             const r = await attachNpcToSelected(host, npc);
             status(r.error || `${npc.name} attached. Select the token to roll for it.`);
           }),
+        actionButton("Place on map", "", { title: "Put a new token for it on the map",
+          note: "A popover cannot drag onto the map, so this drops a token in the middle of your view instead: HIDDEN, named only \"NPC\", carrying the anonymous id. Move it, then show it from Owlbear's own menu when the table should see it." },
+          "Place?", async () => {
+            const r = await placeNpcOnMap(host, npc);
+            status(r.error || `A hidden token for ${npc.name} is in the middle of your view.`);
+          }),
         h("button", { type: "button", class: "ghost", text: "Edit", onclick: () => { inputs.editing = { ...npc, sample: false }; render(); } }),
-        actionButton("×", "ghost init-drop", { title: `Delete ${npc.name} from the roster` }, "Delete?", () => {
+        actionButton("×", "ghost init-drop", { title: `Delete ${npc.name} from the Bestiary` }, "Delete?", () => {
           writeRoster(readRoster().filter((n) => n.id !== npc.id));
           host.changed();
         }),
       );
-      body.append(h("div", { class: "gmt-npc-wrap" }, row, actions));
-      if (inputs.viewing === npc.id) body.append(renderStatblock(npc));
+      body.append(h("div", { class: "gmt-npc-wrap" + (open ? " is-open" : "") }, row, actions, open ? renderStatblock(npc) : null));
     }
+    if (!shown.length) body.append(h("p", { class: "gm-note", text: "Nothing matches." }));
     body.append(h("div", { class: "gmt-row gmt-wrap" },
-      h("button", { type: "button", class: "ghost", text: "Export roster", onclick: exportRoster }),
+      h("button", { type: "button", class: "ghost", text: "Export", onclick: exportRoster }),
       h("button", { type: "button", class: "ghost", text: "Import", onclick: () => { inputs.importing = !inputs.importing; render(); } }),
       h("button", { type: "button", class: "ghost", text: "Detach NPC from token",
         onclick: async () => { const r = await detachNpcFromSelected(host); status(r.error || "NPC detached from the token."); } }),
     ));
     if (inputs.importing) {
-      const ta = h("textarea", { class: "backup-text", rows: "5", placeholder: "Paste an exported roster here", value: inputs.importText,
+      const ta = h("textarea", { class: "backup-text", rows: "5", placeholder: "Paste a roster file here (an export, or the Chapter 5 file)", value: inputs.importText,
         oninput: (e) => { inputs.importText = e.target.value; } });
-      body.append(ta, h("button", { type: "button", class: "gm-btn", text: "Add these to the roster", onclick: () => {
+      const file = h("input", { type: "file", accept: ".txt,.json,text/plain,application/json", class: "gmt-file",
+        onchange: async (e) => { const fl = e.target.files && e.target.files[0]; if (fl) { inputs.importText = (await fl.text()).slice(0, 400000); ta.value = inputs.importText; } } });
+      body.append(file, ta, h("button", { type: "button", class: "gm-btn", text: "Add these to the Bestiary", onclick: () => {
         const r = R.rosterFromText(inputs.importText);
         if (r.error) { status(r.error); return; }
         const byId = new Map(readRoster().map((n) => [n.id, n]));
@@ -1212,31 +1579,68 @@ export function mountGmPanel(root, host, opts = {}) {
     box.append(field("Source", text(d.source, 60, (v) => { d.source = v; }, "Homebrew, or the adventure it is from")));
     if (d.kind === "normal") {
       box.append(field("Truth", text(d.truth, 60, (v) => { d.truth = v; }, "What it is and what it is good at")));
-      box.append(h("div", { class: "gmt-row" },
-        field("Truth attribute", num(d.main.attr, 0, 20, (v) => { d.main.attr = v; })),
-        field("Truth skill", num(d.main.skill, 0, 6, (v) => { d.main.skill = v; })),
-        field("Default attribute", num(d.fallback.attr, 0, 20, (v) => { d.fallback.attr = v; })),
-        field("Default skill", num(d.fallback.skill, 0, 6, (v) => { d.fallback.skill = v; }))));
+      // Competence (p.128) fills a pair; the numbers stay editable.
+      const pick = (pair) => {
+        const sel = h("select", { "aria-label": "Competence", onchange: (e) => {
+          const c = R.COMPETENCE.find((x) => x.id === e.target.value);
+          if (c) { pair.attr = c.attr; pair.skill = c.skill; render(); }
+        } }, h("option", { value: "", text: "Competence…" }), R.COMPETENCE.map((c) => h("option", { value: c.id, text: `${c.label} (${c.range} / ${c.skill})` })));
+        const c = R.competenceOf(pair.attr, pair.skill);
+        sel.value = c ? c.id : "";
+        tip(sel, { title: "NPC Competence", quote: R.COMPETENCE_RULE.quote, page: R.COMPETENCE_RULE.page });
+        return sel;
+      };
+      box.append(h("div", { class: "gmt-row gmt-wrap" },
+        field("Truth", pick(d.main)),
+        field("attribute", num(d.main.attr, 0, 20, (v) => { d.main.attr = v; })),
+        field("skill", num(d.main.skill, 0, 6, (v) => { d.main.skill = v; }))));
+      box.append(h("div", { class: "gmt-row gmt-wrap" },
+        field("Default", pick(d.fallback)),
+        field("attribute", num(d.fallback.attr, 0, 20, (v) => { d.fallback.attr = v; })),
+        field("skill", num(d.fallback.skill, 0, 6, (v) => { d.fallback.skill = v; }))));
+      if (d.fallback.skill >= d.main.skill && d.main.skill > 0) box.append(h("p", { class: "gm-note", text: "The book: the Default skill \"is always lower than the main skill\" (p.127)." }));
     } else {
       box.append(field("Truths, one per line", area(d.truths.join("\n"), (v) => { d.truths = v.split("\n"); }, "Scarred veteran\nCommands by fear")));
       box.append(h("div", { class: "gmt-row gmt-wrap" }, R.NPC_ATTRS.map((k) => field(ATTRS[k], num(d.attrs[k], 0, 20, (v) => { d.attrs[k] = v; })))));
       box.append(h("div", { class: "gmt-row gmt-wrap" }, R.NPC_SKILLS.map((k) => field(SKILLS[k], num(d.skills[k], 0, 6, (v) => { d.skills[k] = v; })))));
       box.append(h("div", { class: "gmt-row" },
-        field("Injuries to defeat", num(d.defeat, 0, 12, (v) => { d.defeat = v; })),
+        tip(field(`Injuries to defeat (0 = Truths + 1 = ${Math.max(1, d.truths.filter((t) => String(t).trim()).length) + 1})`, num(d.defeat, 0, 12, (v) => { d.defeat = v; })),
+          { title: "Defeat", quote: R.MAJOR_DEFEAT_RULE.quote, page: R.MAJOR_DEFEAT_RULE.page }),
         field("Personal Threat", num(d.personalThreat, 0, 20, (v) => { d.personalThreat = v; }))));
     }
-    box.append(h("div", { class: "gmt-row" },
-      tip(field("Menacing", num(d.menacing, 0, 6, (v) => { d.menacing = v; })), { title: "Menacing", quote: R.MENACING_RULE.quote, page: R.MENACING_RULE.page, note: "Used here only as the Threat added when it is revealed." }),
-      field("Protection", num(d.protection, 0, 10, (v) => { d.protection = v; }))));
+    const arm = R.abilityByKey("armored");
+    box.append(h("div", { class: "gmt-row gmt-wrap" },
+      tip(field("Protection", num(d.protection, 0, 10, (v) => { d.protection = v; })), { title: "Armored", quote: arm.quote, page: arm.page }),
+      field("+ vs ranged", num(d.rangedProtection, 0, 10, (v) => { d.rangedProtection = v; })),
+      readSettings().arrivalThreat
+        ? tip(field("Arrival Threat (house rule)", num(d.menacing, 0, 6, (v) => { d.menacing = v; })), { title: R.ARRIVAL_HOUSE_RULE.label, note: R.ARRIVAL_HOUSE_RULE.note })
+        : null));
     const wKeys = ["name", "range", "damage", "qualities"];
     const aKeys = ["name", "roll", "text"];
     const sKeys = ["name", "text"];
-    box.append(field("Weapons: name | Melee or Ranged | damage | qualities",
-      area(pairsToLines(d.weapons, wKeys), (v) => { d._weapons = v; }, "Scrap blade | Melee | 3 | Breaker")));
-    box.append(field("Actions: name | roll | what it does",
-      area(pairsToLines(d.actions, aKeys), (v) => { d._actions = v; }, "Cleave | 1-3 | Attacks the nearest character")));
-    box.append(field("Special abilities: name | what it does",
-      area(pairsToLines(d.abilities, sKeys), (v) => { d._abilities = v; }, "Alarm | When it spots an intruder, add 1 to Threat")));
+    box.append(tip(field("Weapons: name | Melee or Ranged | damage | qualities",
+      area(pairsToLines(d.weapons, wKeys), (v) => { d._weapons = v; }, "Scrap blade | Melee | Impaled 2 | Breaker")),
+      { title: "Natural weapons", quote: R.NATURAL_WEAPON_RULE.quote, page: R.NATURAL_WEAPON_RULE.page }));
+    const actionsArea = area(pairsToLines(d.actions, aKeys), (v) => { d._actions = v; }, d.kind === "major" ? "Crush | 1-4 | Moves to one enemy and makes a melee attack" : "Pounce |  | When it moves to an enemy…");
+    const abilitiesArea = area(pairsToLines(d.abilities, sKeys), (v) => { d._abilities = v; }, "Armored | Protection 2 (reduced to 1 vs Breaker attacks)");
+    // The book's list (pp.130-131), one pick to add its line with the printed wording.
+    const libPick = (type, ta, setter, keys) => {
+      const sel = h("select", { "aria-label": `Add a common ${type}`, onchange: (e) => {
+        const a = R.abilityByKey(e.target.value);
+        e.target.value = "";
+        if (!a) return;
+        const line = keys.length === 3 ? `${a.label} |  | ${a.quote}` : `${a.label} | ${a.quote}`;
+        ta.value = ta.value.trim() ? `${ta.value.trim()}\n${line}` : line;
+        setter(ta.value);
+      } }, h("option", { value: "", text: `+ common ${type} (pp.130-131)…` }),
+        R.NPC_ABILITIES.filter((a) => a.type === type).map((a) => h("option", { value: a.key, text: a.label })));
+      return sel;
+    };
+    box.append(field(d.kind === "major" ? "Actions: name | d20 range | what it does" : "Actions: name | (no roll) | what it does", actionsArea),
+      libPick("action", actionsArea, (v) => { d._actions = v; }, aKeys));
+    box.append(field("Special abilities: name | what it does", abilitiesArea),
+      libPick("ability", abilitiesArea, (v) => { d._abilities = v; }, sKeys));
+    box.append(h("p", { class: "gm-note", text: "A line named like one of the book's abilities or actions (Armored, Swift, Hunt, Retreat…) gets its button in the fight. Any line whose text says \"spend N Threat\" gets a button for that spend." }));
     box.append(field("Notes", area(d.notes, (v) => { d.notes = v; }, "", 2)));
     box.append(h("div", { class: "gmt-row" },
       h("button", { type: "button", class: "gm-btn", text: "Save", onclick: () => {
@@ -1257,10 +1661,9 @@ export function mountGmPanel(root, host, opts = {}) {
     return box;
   }
 
-  function renderNpcs() {
+  function renderBestiarySection() {
     const body = h("div", {});
-    if (inputs.editing) { body.append(renderEditor()); return body; }
-    body.append(renderFight(), renderRoster());
+    body.append(inputs.editing ? renderEditor() : renderBestiary());
     return body;
   }
 
@@ -1313,7 +1716,9 @@ export function mountGmPanel(root, host, opts = {}) {
       section("spend", "Spend Threat", { title: "Spending Threat", note: "The table's log says only that Threat was spent. Your own log keeps the reason. A spend of 3 or more at once also sets off the Maverick drive and, if switched on below, Growth." }, renderSpend),
       section("hazard", "Hazard builder", { title: "Hazards", quote: R.HAZARD_BASE.quote, page: R.HAZARD_BASE.page }, renderHazard),
       section("setup", "Adventure setup", { title: "Starting Threat", quote: R.STAKES[1].quote, page: 111 }, renderSetup),
-      section("npcs", "NPCs and stat blocks", { title: "The roster", note: "Kept in this browser only, never in the room. Export it to keep a copy or move it to another computer." }, renderNpcs),
+      section("fight", "In this fight", { title: "NPCs in the order", quote: R.NPC_SPEND_RULE.quote, page: R.NPC_SPEND_RULE.page,
+        note: "Open a name for its tools: Injuries, Avoid the Injury, Ally or Adversary, group rules, and a button for each ability that costs or adds Threat. All of it is kept in your browser only." }, renderFight),
+      section("bestiary", "Bestiary", { title: "Bestiary", note: "Your stat blocks, kept in this browser only and never in the room. Put one into the fight, on the selected token, or on the map as a new hidden token. Export it to keep a copy or move it to another computer." }, renderBestiarySection),
     );
     if (mode === "popover") root.append(section("log", "My GM log", { title: "Your private log", note: "Only in this browser. The roller's log shows these lines to you too, in place of the plain public line." }, renderLog));
     root.append(section("ref", "Cheat sheet", { title: "Chapter 4 at a glance" }, renderRef));
