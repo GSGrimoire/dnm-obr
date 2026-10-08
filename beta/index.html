@@ -262,13 +262,22 @@
        0.9.2 put +/- buttons in the log header instead, which was not what anyone
        means by resizable and was below the fold on a tall panel besides. The
        buttons survive here as the keyboard-reachable path, beside the grip. -->
-  <div id="resizer" class="resizer" title="Drag to resize the panel">
-    <button id="shorter" class="ghost icon-btn" aria-label="Make the panel shorter">&minus;</button>
-    <div class="resizer-grip" role="separator" aria-label="Drag to resize the panel">
-      <span></span><span></span><span></span>
-    </div>
-    <span id="height-value" class="height-value">900</span>
-    <button id="taller" class="ghost icon-btn" aria-label="Make the panel taller">+</button>
+</div>
+
+<!-- 1.7. Outside #app on purpose: zoom scales #app, and the bar that sets the zoom
+     stays the same size, so the buttons never move out from under the pointer. The
+     zoom group is the sheet's own (.obr-zoomgroup), so the two read as one control. -->
+<div id="resizer" class="resizer" title="Drag to resize the panel">
+  <button id="shorter" class="ghost icon-btn" aria-label="Make the panel shorter" title="Make the panel shorter">&minus;</button>
+  <div class="resizer-grip" role="separator" aria-label="Drag to resize the panel">
+    <span></span><span></span><span></span>
+  </div>
+  <span id="height-value" class="height-value">900</span>
+  <button id="taller" class="ghost icon-btn" aria-label="Make the panel taller" title="Make the panel taller">+</button>
+  <div class="obr-zoomgroup roller-zoom" role="group" aria-label="Zoom">
+    <button id="zoom-out" type="button" class="obr-dock-btn" aria-label="Zoom out" title="Zoom out. Scales the roller, not the panel.">&minus;</button>
+    <span id="zoom-readout" class="obr-zoom-readout">100%</span>
+    <button id="zoom-in" type="button" class="obr-dock-btn" aria-label="Zoom in" title="Zoom in. Scales the roller, not the panel.">+</button>
   </div>
 </div>
 

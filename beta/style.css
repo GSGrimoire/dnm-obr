@@ -426,7 +426,8 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
   justify-content: center;
   gap: 8px;
   padding: 5px 8px;
-  margin-top: 6px;
+  /* 1.7: 6px of margin plus #app's 9px gap, now that the strip sits outside #app. */
+  margin-top: 15px;
   background: var(--bg4);
   border-top: 1px solid var(--border);
   cursor: ns-resize;
@@ -435,6 +436,9 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
 }
 
 .resizer:hover { border-top-color: var(--border-bright); }
+/* 1.7: the zoom group shares the strip with the height controls, set apart from them. */
+.resizer .roller-zoom { margin-left: 10px; }
+.resizer .roller-zoom .obr-dock-btn:disabled { opacity: 0.35; cursor: default; }
 .resizer.is-dragging { background: var(--teal-faint); border-top-color: var(--teal); }
 
 /* Three short bars: the conventional "this is draggable" mark. */

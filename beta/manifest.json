@@ -1,9 +1,9 @@
 {
   "name": "Dreams & Machines (BETA)",
-  "version": "1.6-beta",
+  "version": "1.7-beta",
   "manifest_version": 1,
   "author": "GS Grimoire",
-  "description": "TEST BUILD 1.6. Isolated from the live extension: its own log, pools and tokens.",
+  "description": "TEST BUILD 1.7. Isolated from the live extension: its own log, pools and tokens.",
   "icon": "https://gsgrimoire.github.io/dnm-obr/beta/icon.svg",
   "background_url": "https://gsgrimoire.github.io/dnm-obr/beta/background.html",
   "permissions": [

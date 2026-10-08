@@ -31,7 +31,7 @@ import {
   ID, mayMarkRow, initRowLabel, initRowIdForCharacter,
   readEpochs, epochStatus, canRevealConcealed, readCompAt, COMP_AT_MIN, COMP_AT_MAX,
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
-  readRushed, NPC_KEY, openGmPopover, GM_POPOVER_ID,
+  readRushed, NPC_KEY, openGmPopover, GM_POPOVER_ID, DOCK_LIMITS,
   rerollOptions, rerollLines, rerollProblem, applyReroll, REROLL_LABELS, classifyDie, bondNameKey,
 } from "./dnm.js";
 import {
@@ -2390,6 +2390,56 @@ async function applyHeight(next, { persist = true } = {}) {
   }
 }
 
+// -------------------------------------------------------------
+// Zoom (1.7)
+// -------------------------------------------------------------
+// Asked for "just like in the character sheet": CSS zoom on #app, steps of 10%, the
+// sheet's own range (DOCK_LIMITS.zoom, 60–160%). zoom rather than a transform because it
+// reflows — a transform would keep the layout's width and scroll sideways. The drawer
+// is Owlbear's and its width is fixed, so zooming in narrows the roller's layout, and
+// zooming out shows more of it. One person's preference, kept beside the panel height.
+const ZOOM_KEY = "dnm-obr/panel-zoom";
+const ZOOM_STEP = 0.1;
+const [ZOOM_MIN, ZOOM_MAX] = DOCK_LIMITS.zoom;
+
+function clampRollerZoom(z) {
+  const v = Number(z);
+  if (!Number.isFinite(v) || v <= 0) return 1;
+  return Math.round(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, v)) * 10) / 10;
+}
+
+function readStoredZoom() {
+  try {
+    const raw = localStorage.getItem(ZOOM_KEY);
+    return raw == null ? 1 : clampRollerZoom(raw);
+  } catch {
+    return 1;
+  }
+}
+
+let rollerZoom = 1;
+
+function applyZoom(next, { persist = true } = {}) {
+  rollerZoom = clampRollerZoom(next);
+  const app = el("app");
+  if (app) app.style.zoom = rollerZoom === 1 ? "" : String(rollerZoom);
+  const readout = el("zoom-readout");
+  if (readout) readout.textContent = `${Math.round(rollerZoom * 100)}%`;
+  const out = el("zoom-out");
+  const inn = el("zoom-in");
+  if (out) out.disabled = rollerZoom <= ZOOM_MIN;
+  if (inn) inn.disabled = rollerZoom >= ZOOM_MAX;
+  if (persist) {
+    try { localStorage.setItem(ZOOM_KEY, String(rollerZoom)); } catch { /* private window: unsaved, still applied */ }
+  }
+}
+
+function wireZoomControls() {
+  // Rounded on every step, so ten presses land on 2.0 and not 1.9999999.
+  el("zoom-out")?.addEventListener("click", () => applyZoom(Math.round((rollerZoom - ZOOM_STEP) * 10) / 10));
+  el("zoom-in")?.addEventListener("click", () => applyZoom(Math.round((rollerZoom + ZOOM_STEP) * 10) / 10));
+}
+
 function wireHeightControls() {
   el("shorter")?.addEventListener("click", () => applyHeight(panelHeight - HEIGHT_STEP));
   el("taller")?.addEventListener("click", () => applyHeight(panelHeight + HEIGHT_STEP));
@@ -2452,6 +2502,8 @@ function startStandalone() {
 
 wireUI();
 wireHeightControls();
+wireZoomControls();
+applyZoom(readStoredZoom(), { persist: false });
 // Applied without persisting: this is restoring what was already stored, and in
 // standalone it only updates the label.
 applyHeight(readStoredHeight(), { persist: false });
