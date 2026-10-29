@@ -805,6 +805,19 @@ function renderRollEntry(e) {
   }
 
   li.append(summaryLine(e));
+  if (mine && rerollOptions(e, payerFor(e)).some((o) => o.how === "spirit")) {
+    const hint = document.createElement("div");
+    hint.className = "entry-test";
+    hint.textContent = "Click a non-success die to reroll it for 1 Spirit.";
+    li.append(hint);
+  }
+  if (mine) {
+    const other = document.createElement("button");
+    other.className = "mini";
+    other.textContent = "Choose other reroll options";
+    other.addEventListener("click", () => togglePick(e, Math.max(0, e.detail.findIndex((d) => d.kind === "fail" || d.kind === "complication"))));
+    li.append(other);
+  }
   if (mine) {
     const hint = freeRerollHint(e);
     if (hint) li.append(hint);
@@ -825,7 +838,7 @@ function freeRerollHint(e) {
   if (!free.length) return null;
   const hint = document.createElement("div");
   hint.className = "reroll-hint";
-  hint.textContent = `Free reroll: ${free.map((o) => o.label + (o.when ? ` (only when ${o.when})` : "")).join("; ")}. Press a die to use it.`;
+  hint.textContent = `Free reroll: ${free.map((o) => o.label + (o.when ? ` (only when ${o.when})` : "")).join("; ")}. Choose other reroll options to use it.`;
   hint.title = free.map((o) => `${o.label}: ${o.text || ""}`).join("\n");
   return hint;
 }
@@ -854,11 +867,13 @@ function diceRow(detail, pickFor) {
     const name = { crit: "Critical (2 successes)", success: "Success", complication: "Complication", fail: "No effect" }[d.kind];
     if (pickFor) {
       b.type = "button";
+      const direct = rerollPick.id !== pickFor.id && (d.kind === "fail" || d.kind === "complication")
+        && rerollOptions(pickFor, payerFor(pickFor)).some((o) => o.how === "spirit");
       const picked = rerollPick.id === pickFor.id && rerollPick.dice.has(i);
       if (picked) b.classList.add("is-picked");
-      b.title = `${name}. ${picked ? "Picked to reroll — press again to put it back." : "Press to pick this die to reroll."}`;
+      b.title = direct ? `${name}. Reroll this die for 1 Spirit.` : `${name}. ${picked ? "Picked to reroll — press again to put it back." : "Press to pick this die to reroll."}`;
       b.setAttribute("aria-pressed", picked ? "true" : "false");
-      b.addEventListener("click", () => togglePick(pickFor, i));
+      b.addEventListener("click", () => direct ? rerollDieForSpirit(pickFor, i) : togglePick(pickFor, i));
     } else {
       b.title = d.gone ? `${name}. Rerolled — see below.` : name;
     }
@@ -876,6 +891,22 @@ function canReroll(e) {
   if (standalone || !e || e.kind === "action" || e.claimed) return false;
   if (!e.by || e.by !== myPlayerId) return false;
   return rerollOptions(e, payerFor(e)).length > 0;
+}
+
+function rerollDieForSpirit(e, i) {
+  if (!hasGM) { setStatus("A GM must be connected to record a reroll."); return; }
+  const current = [...state.log, ...hiddenLog].find((r) => r.id === e.id);
+  if (!canReroll(current)) return;
+  const die = current.detail[i];
+  if (!die || (die.kind !== "fail" && die.kind !== "complication")) return;
+  const payer = payerFor(current);
+  const option = rerollOptions(current, payer).find((o) => o.how === "spirit");
+  if (!option) return;
+  disarmReroll();
+  rerollPick = { id: current.id, dice: new Set([i]) };
+  // A direct click always rerolls ONE die. Mobile's two-die option remains in
+  // the explicit picker alongside talents, equipment and other payment sources.
+  return doReroll(current, { ...option, max: 1 }, payer);
 }
 
 // What this roll's reroll would be paid from.
