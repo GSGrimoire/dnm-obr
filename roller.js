@@ -51,6 +51,9 @@ let hasGM = true;   // fails OPEN: a transient party read must not cry wolf
 let hiddenLog = [];
 let concealMode = "open";   // "open" | "hidden" | "secret"
 let diceCount = 2;
+let extraDice = 0;
+let openingPaidRoll = false;
+let paidRollDraft = null;
 let difficulty = 1;
 
 // The character on the currently selected token, if it has one. The popover
@@ -155,6 +158,7 @@ async function refreshHasGM() {
     }
   }
   if (noGmEl) noGmEl.hidden = hasGM || standalone;
+  updateExtraDiceControls();
 }
 
 // -------------------------------------------------------------
@@ -190,9 +194,46 @@ const setStatus = (msg) => { statusEl.textContent = msg || ""; };
 // Actions
 // -------------------------------------------------------------
 async function doRoll() {
+  if (openingPaidRoll) return;
+  if (extraDice > 0) {
+    if (!activeChar || !hasGM || concealMode !== "open") {
+      setStatus("Select a character and use an Open roll to buy Spirit dice.");
+      return;
+    }
+    const extra = Math.max(0, Math.min(3, Math.floor(Number(extraDice) || 0)));
+    if (!(extra >= 1) || extra > Math.max(0, Number(activeChar.char.currentSpirit) || 0)) {
+      setStatus("Not enough Spirit for those extra dice.");
+      return;
+    }
+    if (shutDownAttrs(activeChar.snap, activeChar.char).has(attrKeyEl.value)) {
+      setStatus("That Attribute is shut down by Exhaustion.");
+      return;
+    }
+    const setup = { attr: attrKeyEl.value, skill: skillKeyEl.value, extra, difficulty,
+      label: labelEl.value.trim().slice(0, 40) };
+    const key = JSON.stringify([activeChar.itemId, setup]);
+    if (paidRollDraft?.key !== key) paidRollDraft = { key, request: { ...setup,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}` } };
+    const request = paidRollDraft.request;
+    openingPaidRoll = true;
+    updateExtraDiceControls();
+    try {
+      await openSheetPopover(OBR, activeChar.itemId, safeStorage(), request);
+      extraDice = 0;
+      paidRollDraft = null;
+      setStatus("Character sheet opened to pay Spirit and complete the roll. The result appears in this log.");
+    } catch (err) {
+      setStatus("Could not confirm the sheet opened. Check the log; retrying this purchase reuses its request.");
+      console.error("[dnm] paid roll could not open", err);
+    } finally {
+      openingPaidRoll = false;
+      updateExtraDiceControls();
+    }
+    return;
+  }
   const attrValue = clamp(+attrValEl.value, 0, 20);
   const skillValue = clamp(+skillValEl.value, 0, 20);
-  const dice = rollDice(diceCount);
+  const dice = rollDice(activeChar ? 2 : diceCount);
   const compAt = rollCompAt();
   const result = resolveRoll(dice, attrValue, skillValue, difficulty, compAt);
 
@@ -448,7 +489,7 @@ async function refreshSelection() {
       const withChar = items.find((i) => i.metadata?.[CHAR_KEY]?.code);
       if (withChar) {
         const r = parseCode(withChar.metadata[CHAR_KEY].code);
-        if (!r.error) next = { itemId: withChar.id, snap: r.snap, char: r.char };
+        if (!r.error) next = { itemId: withChar.id, code: withChar.metadata[CHAR_KEY].code, snap: r.snap, char: r.char };
       }
       // 1.5. GM only, and only when no character is selected: a character on the token
       // always wins. The roster lookup is local, so a player's client could not do this
@@ -469,8 +510,22 @@ async function refreshSelection() {
     next = null;
     npc = null;
   }
+  if (activeChar?.itemId !== next?.itemId) extraDice = 0;
   activeChar = next;
   activeNpc = npc;
+  applyChar();
+}
+
+// A sheet's Spirit spend rewrites the token without changing the selection.
+// Refresh only when its code changes, not on every scene drag.
+function updateActiveCharacter(items) {
+  if (!activeChar) return;
+  const item = items.find((i) => i.id === activeChar.itemId);
+  const code = item?.metadata?.[CHAR_KEY]?.code;
+  if (code && code === activeChar.code) return;
+  const parsed = code ? parseCode(code) : null;
+  activeChar = parsed && !parsed.error ? { itemId: item.id, code, snap: parsed.snap, char: parsed.char } : null;
+  if (!activeChar) extraDice = 0;
   applyChar();
 }
 
@@ -573,6 +628,7 @@ function rollCompAt() {
 }
 
 function updateHint() {
+  updateExtraDiceControls();
   const a = clamp(+attrValEl.value, 0, 20);
   const s = clamp(+skillValEl.value, 0, 20);
   const compAt = rollCompAt();
@@ -599,6 +655,31 @@ function updateHint() {
     comp.textContent = `Complication on ${compAt}+ (GM raised the danger)`;
   }
   hintEl.append(comp);
+}
+
+function updateExtraDiceControls() {
+  const select = el("extra-dice");
+  if (!select) return;
+  const spirit = Math.max(0, Number(activeChar?.char.currentSpirit) || 0);
+  const allowed = !!activeChar && hasGM && concealMode === "open";
+  select.disabled = !allowed || openingPaidRoll;
+  for (const option of select.options) option.disabled = Number(option.value) > spirit;
+  select.value = String(extraDice);
+  el("base-dice-label").textContent = activeChar ? "Base dice" : "Dice";
+  el("dice-seg").querySelectorAll("button").forEach((b) => {
+    b.disabled = !!activeChar && Number(b.dataset.dice) !== 2;
+    b.classList.toggle("on", Number(b.dataset.dice) === (activeChar ? 2 : diceCount));
+  });
+  const total = (activeChar ? 2 : diceCount) + extraDice;
+  const roll = el("roll-btn");
+  roll.textContent = extraDice ? `Roll ${total} dice · ${extraDice} Spirit` : `Roll ${total} dice`;
+  roll.disabled = openingPaidRoll || (extraDice > 0 && (!allowed || extraDice > spirit));
+  el("extra-dice-hint").textContent = !activeChar ? "Select a character token to buy extra dice."
+    : concealMode !== "open" ? "Spirit purchases here require an Open roll."
+    : !hasGM ? "A GM must be connected to record a paid roll."
+    : extraDice > spirit ? `Needs ${extraDice} Spirit; only ${spirit} available.`
+    : extraDice ? `2 base + ${extraDice} extra = ${total} dice. Opens the sheet to spend ${extraDice} Spirit and roll.`
+    : `2 base dice are free. Up to 3 extra, 1 Spirit each. ${spirit} Spirit available.`;
 }
 
 // A pool reads as committed + whatever the batcher is still holding, so the number
@@ -756,6 +837,7 @@ function renderRollEntry(e) {
   const test = document.createElement("div");
   test.className = "entry-test";
   test.textContent = `${e.an} ${e.av} (${e.sn} ${e.sv}) · ${e.detail.length}d20`;
+  if (e.boughtDice) test.textContent += ` · ${e.boughtDice} extra for ${e.boughtDice} Spirit`;
   li.append(test);
 
   // 1.5. A rerolled roll is drawn as it was FIRST written — the dice and the verdict as
@@ -1065,8 +1147,15 @@ function wireUI() {
   el("dice-seg").addEventListener("click", (ev) => {
     const btn = ev.target.closest("[data-dice]");
     if (!btn) return;
+    if (activeChar) return;
     diceCount = +btn.dataset.dice;
     setSegmented("dice-seg", btn);
+    updateExtraDiceControls();
+  });
+
+  el("extra-dice").addEventListener("change", (ev) => {
+    extraDice = Math.max(0, Math.min(3, Math.floor(Number(ev.target.value) || 0)));
+    updateExtraDiceControls();
   });
 
   el("diff-seg").addEventListener("click", (ev) => {
@@ -1122,6 +1211,7 @@ function updateConcealHint() {
 }
 
 function setConcealMode(mode) {
+  extraDice = 0;
   concealMode = mode;
   if (concealSeg) {
     concealSeg.querySelectorAll("[data-conceal]").forEach((b) => {
@@ -1129,6 +1219,7 @@ function setConcealMode(mode) {
     });
   }
   updateConcealHint();
+  updateExtraDiceControls();
 }
 
 // -------------------------------------------------------------
@@ -2302,6 +2393,7 @@ async function startInOwlbear() {
   // string comparison and returns.
   OBR.scene.items.onChange((items) => {
     sceneItems = items || [];
+    updateActiveCharacter(sceneItems);
     refreshParty(items);
     if (gmTools) gmTools.sceneChanged();
     // Not signature-guarded the way refreshParty() is: the recovery list changes

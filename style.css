@@ -171,7 +171,8 @@ button:disabled { opacity: .25; cursor: not-allowed; }
   color: var(--text-bright);
 }
 
-.roll-row { display: flex; align-items: center; gap: 10px; }
+.roll-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.roll-row .primary { flex: 1 0 100%; min-width: 0; }
 .hidden-toggle {
   flex-direction: row;
   align-items: center;
@@ -436,6 +437,10 @@ input[readonly] { opacity: .7; cursor: not-allowed; }
 }
 
 .resizer:hover { border-top-color: var(--border-bright); }
+.spirit-dice-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 6px 10px; }
+.spirit-dice-row label { font-size: 12px; }
+.spirit-dice-row select { min-width: 0; width: 100%; }
+.spirit-dice-row .rule-hint { grid-column: 1 / -1; margin: 0; }
 /* 1.7: the zoom group shares the strip with the height controls, set apart from them. */
 .resizer .roller-zoom { margin-left: 10px; }
 .resizer .roller-zoom .obr-dock-btn:disabled { opacity: 0.35; cursor: default; }

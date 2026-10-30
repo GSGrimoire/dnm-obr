@@ -203,7 +203,7 @@
     <p class="rule-hint" id="rule-hint"></p>
 
     <div class="grid-2">
-      <label>d20s
+      <label><span id="base-dice-label">Dice</span>
         <div class="segmented" id="dice-seg">
           <button data-dice="1">1</button>
           <button data-dice="2" class="on">2</button>
@@ -222,6 +222,17 @@
           <button data-diff="5">5</button>
         </div>
       </label>
+    </div>
+
+    <div class="spirit-dice-row">
+      <label for="extra-dice">Extra dice for Spirit</label>
+      <select id="extra-dice" aria-describedby="extra-dice-hint">
+        <option value="0">None · 0 Spirit</option>
+        <option value="1">+1 die · 1 Spirit</option>
+        <option value="2">+2 dice · 2 Spirit</option>
+        <option value="3">+3 dice · 3 Spirit</option>
+      </select>
+      <p id="extra-dice-hint" class="rule-hint">Select a character token to buy extra dice.</p>
     </div>
 
     <!-- 0.9.3. Three modes, replacing the GM-only Hidden checkbox.

@@ -184,10 +184,16 @@ discharged all come back with it.
 
 ### Rolling from the sheet
 
-Click an attribute and a skill to select them, set dice and difficulty, and roll. The
-result lands in the same shared log the roller popover shows. Dice beyond the first two
-cost one Spirit each and are deducted automatically; the button disables if the character
-cannot pay.
+Click an attribute and a skill, choose Difficulty, then select **Extra dice for Spirit**:
+none, +1, +2 or +3. Two base dice are free; each extra die costs one Spirit, for five dice
+at most. The Roll button shows the total and cost. Spirit is deducted when you roll,
+unaffordable choices are disabled, and the purchase resets afterward. The shared log and
+Recent Rolls show the number bought and the Spirit cost.
+
+The roller offers the same purchase selector for a selected character token in Open mode.
+A paid roll opens that character's sheet to pay and complete the test, retaining the
+Attribute, Skill, Difficulty and label. Reopening the same request does not charge again.
+Everyone must reload the room after updating to extension 1.8 and sheet 2.6.
 
 ### Momentum
 
