@@ -232,6 +232,7 @@ async function doRoll() {
     return;
   }
   const attrValue = clamp(+attrValEl.value, 0, 20);
+  paidRollDraft = null;
   const skillValue = clamp(+skillValEl.value, 0, 20);
   const dice = rollDice(activeChar ? 2 : diceCount);
   const compAt = rollCompAt();
@@ -510,7 +511,7 @@ async function refreshSelection() {
     next = null;
     npc = null;
   }
-  if (activeChar?.itemId !== next?.itemId) extraDice = 0;
+  if (activeChar?.itemId !== next?.itemId) { extraDice = 0; paidRollDraft = null; }
   activeChar = next;
   activeNpc = npc;
   applyChar();
@@ -1154,6 +1155,7 @@ function wireUI() {
   });
 
   el("extra-dice").addEventListener("change", (ev) => {
+    paidRollDraft = null;
     extraDice = Math.max(0, Math.min(3, Math.floor(Number(ev.target.value) || 0)));
     updateExtraDiceControls();
   });
@@ -1211,6 +1213,7 @@ function updateConcealHint() {
 }
 
 function setConcealMode(mode) {
+  paidRollDraft = null;
   extraDice = 0;
   concealMode = mode;
   if (concealSeg) {
