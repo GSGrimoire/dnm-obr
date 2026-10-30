@@ -348,7 +348,7 @@ export function gmPopover({ url, dock, viewport }) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.7B";
+export const EXT_VERSION = "1.8";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
@@ -753,6 +753,7 @@ export function sanitizeEntry(entry) {
     comp: cleanCount(entry.comp),
     pass: !!entry.pass,
     gain: cleanCount(entry.gain),
+    ...(entry.boughtDice ? { boughtDice: Math.max(0, Math.min(3, Math.floor(Number(entry.boughtDice) || 0))) } : {}),
     hidden: !!entry.hidden,
     // 0.9.5. `gain` already records the surplus; these two decide whether it can still
     // be claimed and by whom, so they have to survive the round trip like `conceal`.
@@ -1917,7 +1918,7 @@ export const clamp = (n, lo, hi) => (Number.isNaN(n) ? lo : Math.min(hi, Math.ma
 // in plain node.
 export const SHEET_URL = "https://gsgrimoire.github.io/dnm-cc/";
 
-export async function openSheetPopover(obr, itemId, storage) {
+export async function openSheetPopover(obr, itemId, storage, skillTest = null) {
   let viewport = null;
   try {
     const [width, height] = await Promise.all([
@@ -1929,7 +1930,10 @@ export async function openSheetPopover(obr, itemId, storage) {
     viewport = null;
   }
   const dock = storage ? readDock(storage) : clampDock(null);
-  const url = `${SHEET_URL}?item=${encodeURIComponent(itemId)}`;
+  let url = `${SHEET_URL}?item=${encodeURIComponent(itemId)}`;
+  // A paid primary test runs on the sheet, the one owner of character resources.
+  // The sheet validates this request, pays before rolling and records its id.
+  if (skillTest) url += `&test=${encodeURIComponent(JSON.stringify(skillTest))}`;
   await obr.popover.open(sheetPopover({ url, dock, viewport }));
 }
 
