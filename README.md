@@ -96,12 +96,23 @@ late still sees it. It also means we never write networking code.
 Room metadata is capped at 16 kB across every extension installed in the room, so the log
 trims itself to the most recent 40 entries and then trims further by size if needed.
 
-**Hidden rolls** are never written to room metadata at all. They exist only in the GM's
-open panel for that session, so a player cannot dig them out of devtools. The tradeoff is
-that closing the panel discards them.
+**Concealed rolls** come in two kinds, and they promise very different things.
 
-**Permissions**: only the GM sees the Hidden toggle, the Clear button and the table
-controls, and only the GM can change Threat. Anyone can change Momentum — it is the
+- **Hidden** (anyone) hides the result from other players' *screens*, not from their
+  browsers. Owlbear has no private channel, so the full roll is broadcast and written to
+  room metadata like any other, and each client decides what to draw: the roller and the
+  GM see the dice, everyone else sees that a roll was made. A player who opens devtools
+  can read a Hidden result.
+- **Secret** (GM only) is the one that is actually private. Nothing is broadcast and
+  nothing reaches room metadata; the result exists only in the GM's own browser
+  (`localStorage`). Use Secret for anything a player must genuinely not be able to read.
+
+Until 1.8B this paragraph said Hidden rolls never reached room metadata. That was true
+of 0.9.3 and stopped being true in 0.9.4, when Hidden began reaching the GM; see
+`canRevealConcealed()` in `dnm.js`.
+
+**Permissions**: only the GM sees the Secret toggle, the Clear button and the table
+controls, and only the GM can lower Threat. Anyone can change Momentum — it is the
 group's pool.
 
 Until 0.9.1 all of that was enforced only in the panel. This paragraph used to say that

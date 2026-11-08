@@ -33,6 +33,7 @@ import {
   createPoolBatcher, DRIVE_THREAT_SPEND_MIN, openSheetPopover,
   readRushed, NPC_KEY, openGmPopover, GM_POPOVER_ID, DOCK_LIMITS,
   rerollOptions, rerollLines, rerollProblem, applyReroll, REROLL_LABELS, classifyDie, bondNameKey,
+  MOMENTUM_CAP,
 } from "./dnm.js";
 import {
   mountGmPanel, pushEpochVia, startInitiativeVia, tickRound, spendSideEffects, readFight, spendPersonalThreat,
@@ -370,9 +371,10 @@ function stepPool(pool, delta) {
 // -------------------------------------------------------------
 // Hidden rolls (0.9.2: persisted)
 // -------------------------------------------------------------
-// A hidden roll is still never broadcast and never written to room metadata — that
-// is the whole property, and it is unchanged. What changed is where the GM's own
-// copy lives.
+// (1.8B: this comment predates 0.9.4. What it says now applies to SECRET rolls only — a
+// HIDDEN roll has been broadcast in full since 0.9.4; see canRevealConcealed() in dnm.js.)
+// A secret roll is never broadcast and never written to room metadata — that is the
+// whole property, and it is unchanged. What changed is where the GM's own copy lives.
 //
 // It used to be a plain array, so closing the popover threw the lot away. From the
 // GM's seat that reads as hidden rolls behaving inconsistently: three are listed,
@@ -451,8 +453,21 @@ async function claimMomentum(entry) {
   // 0.9.8B: `!entry.by` — see renderEntry. A roll nobody is recorded as having made
   // must not be a roll nobody can claim.
   if (role !== "GM" && entry.by && entry.by !== myPlayerId) return;
+  // 1.8B. Where the room's writer pays claims itself, the claim is the whole operation:
+  // marker, capped payout and log line in one event, so a second press or a second
+  // client cannot pay twice. A Secret roll is not in the room log for the writer to
+  // find, and a writer older than 1.8B would mark the claim and pay nothing, so both
+  // keep the old marker-plus-delta — capped here, as the sheet caps it.
+  if (state?.claimPay && entry.conceal !== "secret") {
+    await announce({ type: "claim", id: entry.id, pay: true, who: entry.who, t: Date.now() });
+    setStatus(`Claimed ${entry.gain} Momentum for the group pool.`);
+    return;
+  }
+  const room = Math.max(0, Number(state?.momentum) || 0);
+  const gain = Math.max(0, Math.min(entry.gain, MOMENTUM_CAP - room));
   await announce({ type: "claim", id: entry.id });
-  await announce({ type: "pool", pool: "momentum", delta: entry.gain });
+  if (!gain) { setStatus(`The group pool is already at ${room} Momentum.`); return; }
+  await announce({ type: "pool", pool: "momentum", delta: gain });
   await announce({
     type: "action",
     entry: {
@@ -461,12 +476,12 @@ async function claimMomentum(entry) {
       kind: "action",
       who: entry.who,
       label: "Momentum from a roll",
-      detail: `added ${entry.gain} to the group pool`,
+      detail: `added ${gain} to the group pool`,
       pool: "momentum",
-      delta: entry.gain,
+      delta: gain,
     },
   });
-  setStatus(`Added ${entry.gain} Momentum to the group pool.`);
+  setStatus(`Added ${gain} Momentum to the group pool.`);
 }
 
 async function clearLog() {

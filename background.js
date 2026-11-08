@@ -17,7 +17,7 @@
 // =============================================================
 
 import OBR from "./sdk.js";
-import { ID, CHAR_KEY, NPC_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent,
+import { ID, CHAR_KEY, NPC_KEY, CHANNEL, ROOM_KEY, EMPTY_STATE, applyEvent, trimState, isGmOnlyEvent, isElectedWriter,
   openSheetPopover, characterTokens, noteVanished, readRecovery, writeRecovery } from "./dnm.js";
 
 const BASE = new URL(".", import.meta.url).href;
@@ -133,6 +133,8 @@ function persist(ev, ctx) {
 
 // Connection ids, not player ids: a broadcast identifies its sender by connection.
 let gmConnections = new Set();
+// 1.8B. This client's own connection, kept for the writer election below.
+let selfConnection = null;
 // 1.5. Who is behind each connection, so a reroll can be checked against the roll's
 // `by` (a player id). Rebuilt with the GM set, from the same party read.
 let playerByConnection = new Map();
@@ -155,6 +157,7 @@ async function refreshGmConnections() {
     // without it the GM's own presses would be the first thing refused.
     if (self) next.add(self);
     gmConnections = next;
+    selfConnection = self || null;
   } catch (err) {
     // Deliberately keeps the previous set rather than clearing it. Clearing on a
     // transient failure would refuse the GM's own controls until the next party
@@ -167,7 +170,21 @@ async function refreshGmConnections() {
 // subscription is guarded rather than re-registered each time.
 let unsubscribeRelay = null;
 
+// 1.8B. ONE writer, even with several GM connections in the room.
+//
+// Every background page with the GM role used to relay. Two GMs, or one GM with the
+// room open in two tabs, meant two writers: each read the metadata, applied the same
+// event and wrote it back, so a +1 to a pool became +2 whenever the second read landed
+// after the first write, and a change was lost whenever it landed before. Rolls were
+// safe because they are deduplicated by id; pool deltas and epochs are not.
+//
+// So the GM connections elect one writer: isElectedWriter() in dnm.js. When that GM
+// leaves, the party change re-runs the election and the next one takes over. While the
+// party list is settling there can be a moment with two writers or none; that is the
+// window the old design had permanently.
+
 function relay(event) {
+  if (!isElectedWriter(selfConnection, gmConnections)) return;
   if (isGmOnlyEvent(event.data) && !gmConnections.has(event.connectionId)) {
     console.warn(
       "[dnm] refused a GM-only event from a non-GM connection:",
@@ -214,8 +231,18 @@ let baselineSignature = "";
 
 function watchForLostCharacters(items) {
   const current = characterTokens(items);
-  const signature = current.map((t) => t.id + ":" + t.code.length).join("|");
-  if (signature === baselineSignature) return;
+  // 1.8B. The signature is the token ids alone. It used to include each code's
+  // LENGTH, which skipped every edit that left the length unchanged — routine with the
+  // compressed DM2 format — and so kept the OLD code as the one to recover. Deleting the
+  // token then offered the character as it was before the edit.
+  //
+  // Same ids means nothing can have vanished, so there is nothing to diff; but the
+  // baseline still takes the current codes, which is one assignment per drag frame.
+  const signature = current.map((t) => t.id).join("|");
+  if (signature === baselineSignature) {
+    if (tokenBaseline !== null) tokenBaseline = current;
+    return;
+  }
   baselineSignature = signature;
 
   // No baseline yet means the scene just became ready, or this is the first change
