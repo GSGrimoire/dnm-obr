@@ -348,7 +348,7 @@ export function gmPopover({ url, dock, viewport }) {
 // dock.test.mjs, which fails if this and manifest.json disagree — that is the point of
 // it, because the manifest is the file everyone forgets on a release. Change both
 // together. (Until 1.0 it was also reported to a popped-out sheet, which is gone.)
-export const EXT_VERSION = "1.8";
+export const EXT_VERSION = "1.8B";
 // Kept at the original key so existing rooms do not lose their roll log.
 export const ROOM_KEY = "com.thuknights.dnm-rolls/state";
 export const CHANNEL = `${ID}/events`;
@@ -668,6 +668,34 @@ export function epochStatus(char, roomEpochs) {
   return { state: pending.length ? "behind" : "current", pending };
 }
 export const MAX_LOG_ENTRIES = 40;
+
+// 1.8B. The group Momentum pool's ceiling, the same 6 the sheet has always used
+// (`momentumMax`). Only a CLAIM is capped here: the manual + and - in the roller have
+// never been capped and still are not, so a GM can still set the pool by hand.
+export const MOMENTUM_CAP = 6;
+
+// 1.8B. Spirit owed for rerolls made in the ROLLER (`pay: "room"`), kept beside the log
+// rather than only inside it. The log keeps 40 entries, and a busy table can push a
+// paid reroll off the end before its owner opens the sheet — which used to delete the
+// only record of the debt. Bounded by count and age like the bond queue.
+export const MAX_REROLL_DEBTS = 20;
+export const REROLL_DEBT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function readRerollDebts(state, now = Date.now()) {
+  const raw = Array.isArray(state?.debts) ? state.debts : [];
+  const out = [];
+  for (const d of raw) {
+    if (!d || typeof d !== "object") continue;
+    const k = cleanText(d.k, 64);
+    const w = cleanText(d.w, FIELD_LIMITS.who);
+    const h = d.h === "spirit" || d.h === "inspire" ? d.h : null;
+    const t = Number.isFinite(Number(d.t)) ? Number(d.t) : 0;
+    if (!k || !w || !h || now - t > REROLL_DEBT_TTL_MS) continue;
+    if (out.some((x) => x.k === k)) continue;
+    out.push({ k, w, h, t });
+  }
+  return out.slice(-MAX_REROLL_DEBTS);
+}
 export const MAX_STATE_BYTES = 11000; // headroom inside the shared 16 kB room budget
 
 // -------------------------------------------------------------
@@ -1292,6 +1320,18 @@ export function isGmOnlyEvent(ev) {
   return (Math.round(Number(ev.delta) || 0)) < 0;
 }
 
+// 1.8B. Which of several GM background pages writes room metadata: the one with the
+// lowest connection id. Every GM client works this out the same way from the same
+// party list, so they agree without talking to each other. `gms` includes `self`.
+// An unknown `self` (the party read failed) answers true: that is the old behaviour,
+// and a GM who writes nothing at all is worse than a rare double write.
+export function isElectedWriter(self, gms) {
+  if (!self) return true;
+  let lowest = null;
+  for (const id of gms) if (lowest === null || String(id) < lowest) lowest = String(id);
+  return lowest === null || lowest === String(self);
+}
+
 // -------------------------------------------------------------
 // Shared event reducer
 // -------------------------------------------------------------
@@ -1378,7 +1418,29 @@ export function applyEvent(state, ev, ctx) {
     //
     // One-way and idempotent: claiming an already-claimed entry changes nothing, which
     // is what makes a double-click or a re-delivered broadcast harmless.
-    next.log = next.log.map((e) => (e.id === ev.id ? { ...e, claimed: true } : e));
+    //
+    // 1.8B. With `pay`, the claim IS the payment: the marker, the capped payout and the
+    // log line happen here in one step, so two clients pressing on the same unclaimed
+    // roll pay once. Before this the marker was idempotent but the separate pool delta
+    // each client sent was not, and a roll worth 3 could pay 6. The amount is the
+    // ROLL's stored gain, never a number the sender supplies. Without `pay` it is the
+    // old marker, which is what an older roller or sheet still sends beside its own
+    // pool delta.
+    const target = next.log.find((e) => e.id === ev.id);
+    if (ev.pay && target && target.kind !== "action" && !target.claimed) {
+      const before = Math.max(0, Number(next.momentum) || 0);
+      const added = Math.max(0, Math.min(cleanCount(target.gain), MOMENTUM_CAP - before));
+      next.momentum = before + added;
+      const who = cleanText(ev.who, FIELD_LIMITS.who) || target.who;
+      const line = sanitizeEntry({
+        id: `${target.id}-m`, t: Number(ev.t) || Date.now(), kind: "action", who,
+        label: added ? "Momentum from a roll" : "Momentum not added",
+        detail: added ? `added ${added} to the group pool` : `group pool already at ${before}`,
+        ...(added ? { pool: "momentum", delta: added } : {}),
+      });
+      if (line && !next.log.some((e) => e.id === line.id)) next.log.unshift(line);
+    }
+    next.log = next.log.map((e) => (e.id === ev.id ? { ...e, claimed: true } : e)).slice(0, MAX_LOG_ENTRIES);
   } else if (ev?.type === "bond" && ev.effect) {
     // 0.9.6. Deduplicated by id like a roll, for the same reason: a broadcast can be
     // delivered twice, and an effect that pays out twice is a free Spirit.
@@ -1403,7 +1465,16 @@ export function applyEvent(state, ev, ctx) {
     next.log = next.log.map((e) => {
       if (e.id !== ev.id) return e;
       if (ctx && "sender" in ctx && (!e.by || e.by !== ctx.sender)) return e;
-      return applyReroll(e, ev) || e;
+      const out = applyReroll(e, ev);
+      // 1.8B. A reroll the sheet has still to pay for is also filed as a debt, which
+      // outlives the log line. See MAX_REROLL_DEBTS.
+      if (out && ev.pay !== "sheet" && (ev.how === "spirit" || ev.how === "inspire")) {
+        const last = out.rr[out.rr.length - 1];
+        const k = `${String(e.id).slice(0, 40)}:${String(last.g).slice(0, 20)}`;
+        const debts = readRerollDebts(next);
+        if (!debts.some((d) => d.k === k)) next.debts = [...debts, { k, w: e.who, h: ev.how, t: last.t }].slice(-MAX_REROLL_DEBTS);
+      }
+      return out || e;
     });
   } else if (ev?.type === "rush") {
     // 1.5. Stamped with the scene the room is in NOW, which is why the GM panel sends
@@ -1451,6 +1522,13 @@ export function trimState(state) {
   // line an undrained one still owes somebody a Spirit — so the log gives way to them
   // rather than the other way round.
   next.bonds = pruneBondQueue(readBondQueue(next));
+  // 1.8B. Owed reroll Spirit gives way to nothing, for the same reason as the bonds.
+  next.debts = readRerollDebts(next);
+  // 1.8B. Says this room's writer pays a claim itself (`claim` with `pay`). A sheet or
+  // roller that is newer than the GM's cached background page reads this before using
+  // that path, and falls back to the old marker-plus-delta when it is missing, rather
+  // than sending a claim an old writer would mark and never pay.
+  next.claimPay = 1;
   next.log = (next.log || []).slice(0, MAX_LOG_ENTRIES);
   while (next.log.length > 1 && JSON.stringify(next).length > MAX_STATE_BYTES) next.log.pop();
   return next;
@@ -1658,6 +1736,11 @@ function bitReader(bytes) {
 
 let fixedLiteralTree = null, fixedDistanceTree = null;
 
+// 1.8B / 2.6B. A ceiling on what one payload may inflate to. A real character is
+// about 10 kB of JSON; without a ceiling 2 kB of crafted deflate expands to 2 MB,
+// synchronously, in whoever opens the token. 256 kB is twenty-five real characters.
+const INFLATE_LIMIT = 262144;
+
 export function inflateRaw(bytes) {
   const reader = bitReader(bytes);
   const out = [];
@@ -1671,6 +1754,7 @@ export function inflateRaw(bytes) {
       reader.align();
       const len = reader.byte() | (reader.byte() << 8);
       reader.byte(); reader.byte();
+      if (out.length + len > INFLATE_LIMIT) throw new Error("deflate: payload too large");
       for (let i = 0; i < len; i++) out.push(reader.byte());
       continue;
     }
@@ -1716,6 +1800,7 @@ export function inflateRaw(bytes) {
     for (;;) {
       const symbol = reader.symbol(literals);
       if (symbol === 256) break;
+      if (out.length >= INFLATE_LIMIT) throw new Error("deflate: payload too large");
       if (symbol < 256) { out.push(symbol); continue; }
       const li = symbol - 257;
       if (li >= LEN_BASE.length) throw new Error("deflate: length code out of range");
