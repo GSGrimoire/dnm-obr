@@ -1,5 +1,7 @@
 # Dreams & Machines — Rolls
 
+<p><img src="brand/full-logo-512.png" width="140" height="140" alt="GS Grimoire Dreams &amp; Machines extension logo"></p>
+
 An Owlbear Rodeo extension for Dreams & Machines: shared Skill Tests, a Rolls and Actions
 log that survives refreshes and rejoins, shared Momentum and Threat counters, GM table
 controls, a GM party panel, and full character sheets imported from the character creator.
@@ -193,7 +195,7 @@ Recent Rolls show the number bought and the Spirit cost.
 The roller offers the same purchase selector for a selected character token in Open mode.
 A paid roll opens that character's sheet to pay and complete the test, retaining the
 Attribute, Skill, Difficulty and label. Reopening the same request does not charge again.
-Everyone must reload the room after updating to extension 1.8 and sheet 2.6.
+Everyone must reload the room after updating to extension 1.8.1 and sheet 2.6.1.
 
 ### Momentum
 
